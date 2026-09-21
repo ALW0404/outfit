@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Outfit</title>
+<meta name="description" content="Kleiderschrank und Outfit-Vorschläge nach Wetter, Anlass und Stimmung">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Outfit">
+<meta name="theme-color" content="#8a5a44">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <h1>Outfit</h1>
+</header>
+<main id="main"></main>
+<nav id="tabbar">
+  <button data-tab="today"  onclick="App.setTab('today')"><span class="ico">☀️</span><span>Heute</span></button>
+  <button data-tab="closet" onclick="App.setTab('closet')"><span class="ico">👕</span><span>Schrank</span></button>
+  <button data-tab="body"   onclick="App.setTab('body')"><span class="ico">🧍</span><span>Körper</span></button>
+  <button data-tab="data"   onclick="App.setTab('data')"><span class="ico">💾</span><span>Daten</span></button>
+</nav>
+<div id="modal-root"></div>
+<input type="file" id="pick-item" accept="image/*" hidden onchange="App.itemFileChosen(this)">
+<input type="file" id="pick-body" accept="image/*" hidden onchange="App.bodyFileChosen(this)">
+<input type="file" id="pick-import" accept=".json,application/json" hidden onchange="App.importChosen(this)">
+<noscript>Diese App benötigt JavaScript.</noscript>
+<script src="app.js"></script>
+</body>
+</html>
