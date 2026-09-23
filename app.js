@@ -10,40 +10,139 @@ const localISO = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad
 const todayISO = () => localISO(new Date());
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const pct = v => (v * 100).toFixed(2) + '%';
-const fmtNudge = v => (v > 0 ? '+' : '') + Math.round(v * 100);
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const shuffled = arr => arr.map(v => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map(p => p[1]);
 
 /* ================= Kategorien ================= */
+/* role steuert die Collage, weight die Größe darin, warmth den Vorgabewert */
 const CATS = {
-  top:    { label: 'Oberteil',   ico: '👕', z: 20, w: 1.22, anchor: 'shoulder', warmth: 2 },
-  bottom: { label: 'Hose/Rock',  ico: '👖', z: 15, w: 1.06, anchor: 'waist',    warmth: 2 },
-  dress:  { label: 'Kleid',      ico: '👗', z: 18, w: 1.20, anchor: 'shoulder', warmth: 2 },
-  outer:  { label: 'Jacke',      ico: '🧥', z: 30, w: 1.42, anchor: 'shoulder', warmth: 4 },
-  shoes:  { label: 'Schuhe',     ico: '👟', z: 12, w: 0.95, anchor: 'floor',    warmth: 2 },
-  acc:    { label: 'Accessoire', ico: '🧣', z: 40, w: 0.75, anchor: 'neck',     warmth: 1 }
+  top:    { label: 'Tops & Shirts',           kurz: 'Tops',    ico: '👕', role: 'base_top',    warmth: 2 },
+  knit:   { label: 'Pullover & Strickjacken', kurz: 'Strick',  ico: '🧶', role: 'base_top',    warmth: 4 },
+  blouse: { label: 'Blusen',                  kurz: 'Blusen',  ico: '👚', role: 'base_top',    warmth: 2 },
+  pants:  { label: 'Hose',                    kurz: 'Hosen',   ico: '👖', role: 'base_bottom', warmth: 3 },
+  skirt:  { label: 'Rock',                    kurz: 'Röcke',   ico: '🩱', role: 'base_bottom', warmth: 2 },
+  dress:  { label: 'Kleid',                   kurz: 'Kleider', ico: '👗', role: 'base_full',   warmth: 2 },
+  outer:  { label: 'Jacke & Mantel',          kurz: 'Jacken',  ico: '🧥', role: 'layer',       warmth: 4 },
+  shoes:  { label: 'Schuhe',                  kurz: 'Schuhe',  ico: '👟', role: 'shoes',       warmth: 2 },
+  bag:    { label: 'Tasche',                  kurz: 'Taschen', ico: '👜', role: 'bag',         warmth: 1 },
+  acc:    { label: 'Accessoire',              kurz: 'Acc',     ico: '🧣', role: 'acc',         warmth: 1 }
 };
-const CAT_ORDER = ['top', 'bottom', 'dress', 'outer', 'shoes', 'acc'];
+const CAT_ORDER = ['top', 'knit', 'blouse', 'pants', 'skirt', 'dress', 'outer', 'shoes', 'bag', 'acc'];
+/* Bausteine einer Kombination – Reihenfolge wie in der Collage */
+const SLOTS = [
+  { key: 'base_top',    label: 'Oberteil',   cats: ['top', 'knit', 'blouse'] },
+  { key: 'base_bottom', label: 'Unterteil',  cats: ['pants', 'skirt'] },
+  { key: 'base_full',   label: 'Kleid',      cats: ['dress'] },
+  { key: 'layer',       label: 'Jacke',      cats: ['outer'] },
+  { key: 'shoes',       label: 'Schuhe',     cats: ['shoes'] },
+  { key: 'bag',         label: 'Tasche',     cats: ['bag'] },
+  { key: 'acc',         label: 'Accessoire', cats: ['acc'], max: 2 }
+];
+const fmtDate = iso => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}.${m}.${y}` : ''; };
+
 const WARMTH_LBL = ['', 'sehr leicht', 'leicht', 'mittel', 'warm', 'sehr warm'];
 const FORMAL_LBL = ['', 'sehr leger', 'leger', 'normal', 'schick', 'sehr schick'];
 
-const CAL_PTS = [
-  { key: 'shoulderL', label: 'Schulter links im Bild', hint: 'Äußere Kante, wo der Ärmel ansetzt' },
-  { key: 'shoulderR', label: 'Schulter rechts im Bild', hint: 'Gegenüberliegende Schulterkante' },
-  { key: 'waist',     label: 'Taille',                  hint: 'Wo der Hosenbund sitzt' },
-  { key: 'crotch',    label: 'Schritt',                 hint: 'Übergang zu den Beinen' },
-  { key: 'knee',      label: 'Knie',                    hint: 'Mitte der Kniescheibe' },
-  { key: 'floor',     label: 'Boden',                   hint: 'Wo deine Sohlen den Boden berühren' }
+const SEASONS = [
+  { key: 'fruehjahr', label: 'Frühjahr', ico: '🌱' },
+  { key: 'sommer',    label: 'Sommer',   ico: '☀️' },
+  { key: 'herbst',    label: 'Herbst',   ico: '🍂' },
+  { key: 'winter',    label: 'Winter',   ico: '❄️' }
 ];
+const seasonNow = () => ['winter','winter','fruehjahr','fruehjahr','fruehjahr','sommer',
+  'sommer','sommer','herbst','herbst','herbst','winter'][new Date().getMonth()];
+/* Zielwärme je Jahreszeit, gegen die Teile bewertet werden */
+const SEASON_WARMTH = { fruehjahr: 2.6, sommer: 1.5, herbst: 3.4, winter: 4.4 };
+/* Vorgabe beim Erfassen: aus der Wärme abgeleitet, vom User überschreibbar */
+const seasonsFromWarmth = w => w <= 1 ? ['sommer']
+  : w === 2 ? ['fruehjahr', 'sommer', 'herbst']
+  : w === 3 ? ['fruehjahr', 'herbst']
+  : w === 4 ? ['herbst', 'winter'] : ['winter'];
+
+/* ================= Farbwelten ================= */
+function hexToHSL(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  const l = (mx + mn) / 2;
+  if (!d) return { h: 0, s: 0, l };
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h;
+  if (mx === r) h = 60 * (((g - b) / d) % 6);
+  else if (mx === g) h = 60 * ((b - r) / d + 2);
+  else h = 60 * ((r - g) / d + 4);
+  return { h: (h + 360) % 360, s, l };
+}
+const WORLD_LBL = { neutral: 'Neutral', rot: 'Rot & Rosé', braun: 'Braun & Camel', gelb: 'Gelb & Senf',
+  gruen: 'Grün', tuerkis: 'Türkis', blau: 'Blau & Denim', lila: 'Lila', pink: 'Pink & Beere' };
+
+/* Ordnet eine Farbe einer Farbwelt zu.
+   Farbton allein reicht nicht: ein dunkles, gedämpftes Warm ist Braun und nicht Rot,
+   ein helles warmes Creme ist Neutral und keine eigene Farbwelt. */
+function colorWorld(hex) {
+  const c = hexToHSL(hex);
+  if (!c) return 'neutral';
+  const { h, s, l } = c;
+  if (l > 0.92 || l < 0.09 || s < 0.15) return 'neutral';
+  /* Nude, Sand, Creme, Beige */
+  if (h >= 8 && h <= 60 && (l > 0.78 ? s < 0.45 : (l > 0.58 && s < 0.32))) return 'neutral';
+  const warm = h >= 335 || h <= 48;
+  if (warm && s < 0.38 && l < 0.58) return 'braun';
+  if (h >= 335 || h < 14) return 'rot';
+  if (h < 48) return 'braun';
+  if (h < 68) return 'gelb';
+  if (h < 160) return 'gruen';
+  if (h < 200) return 'tuerkis';
+  if (h < 258) return 'blau';
+  if (h < 300) return 'lila';
+  return 'pink';
+}
+/* Bunte Welten eines Teils – Neutral zählt bewusst nicht mit (Entscheidung des Users) */
+const itemWorlds = it => [...new Set((it.colors || []).map(colorWorld))].filter(w => w !== 'neutral');
+const outfitWorlds = items => [...new Set(items.flatMap(itemWorlds))];
+const MAX_WORLDS = 3;
+/* Stabiler Schlüssel, um dieselbe Kombination nicht doppelt zu merken */
+const outfitKey = ids => [...ids].sort().join('|');
+/* Ein Outfit passt nur in die Jahreszeiten, die alle seine Teile mittragen */
+const outfitSeasons = items => !items.length ? []
+  : SEASONS.map(s => s.key).filter(k => items.every(it => (it.seasons || []).includes(k)));
 
 /* ================= Datenbank (localStorage) ================= */
 const LS_KEY = 'outfit-v1';
 const LS_UI = 'outfit-ui';
+const DB_VERSION = 2;
 
+/* v1 kannte nur top/bottom/acc – die feineren Kategorien muss der User nachsortieren. */
+const CAT_MIGRATION = { top: 'top', bottom: 'pants', acc: 'acc', dress: 'dress', outer: 'outer', shoes: 'shoes' };
+const NEEDS_SORT_FROM = new Set(['top', 'bottom', 'acc']);
+
+function migrate(d) {
+  if (!d || d.version === DB_VERSION) return d;
+  if (d.version === 1) {
+    (d.items || []).forEach(it => {
+      const old = it.cat;
+      it.cat = CAT_MIGRATION[old] || 'top';
+      if (NEEDS_SORT_FROM.has(old)) it.needsSort = true;
+      if (!it.seasons) it.seasons = seasonsFromWarmth(it.warmth || 3);
+      delete it.fit;
+    });
+    delete d.body;
+    d.trends = d.trends || [];
+    d.version = DB_VERSION;
+  }
+  return d;
+}
 function loadDB() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) { const d = JSON.parse(raw); if (d && d.version === 1) return d; }
+    if (raw) {
+      const d = migrate(JSON.parse(raw));
+      if (d && d.version === DB_VERSION) return d;
+    }
   } catch (e) { console.warn('DB laden fehlgeschlagen', e); }
-  return { version: 1, items: [], body: null, outfits: [], prefs: {} };
+  return { version: DB_VERSION, items: [], trends: [], outfits: [], prefs: {} };
 }
 let DB = loadDB();
 function save() {
@@ -51,14 +150,16 @@ function save() {
   catch (e) { toast('Speicher voll – bitte in Daten aufräumen'); console.error(e); }
 }
 
-let UI = { tab: 'today', closetFilter: 'all' };
+let UI = { tab: 'today', closetFilter: 'all', season: seasonNow(), mood: 3 };
 try { Object.assign(UI, JSON.parse(localStorage.getItem(LS_UI) || '{}')); } catch (e) {}
-UI.modal = null; UI.draft = null; UI.calIdx = -1; UI.testOutfit = null;
+UI.modal = null; UI.draft = null; UI.sorting = false; UI.suggestions = null;
+UI.builder = null; UI.picker = null;
 function saveUI() {
-  localStorage.setItem(LS_UI, JSON.stringify({ tab: UI.tab, closetFilter: UI.closetFilter }));
+  localStorage.setItem(LS_UI, JSON.stringify({ tab: UI.tab, closetFilter: UI.closetFilter,
+    season: UI.season, mood: UI.mood }));
 }
-
 const itemById = id => DB.items.find(i => i.id === id);
+const needsSortCount = () => DB.items.filter(i => i.needsSort).length;
 
 /* ================= Bilder (IndexedDB) ================= */
 let _idb = null;
@@ -117,10 +218,27 @@ function dataURLtoBlob(du) {
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   return new Blob([arr], { type: mime });
 }
-const canvasToBlob = (cv, type, q) => new Promise((res, rej) =>
-  cv.toBlob(b => b ? res(b) : rej(new Error('toBlob')), type, q));
+const canvasToBlob = (cv, type, q) => new Promise(res => cv.toBlob(b => res(b), type, q));
 
-/* Schneidet transparente Ränder weg; gibt null zurück, wenn das Bild keine Transparenz hat. */
+/* Safari kann WebP erst ab iOS 17 schreiben; toBlob fällt sonst still auf PNG zurück. */
+let _webp = null;
+async function webpOK() {
+  if (_webp !== null) return _webp;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 4;
+  const b = await canvasToBlob(cv, 'image/webp', 0.8);
+  _webp = !!b && b.type === 'image/webp';
+  return _webp;
+}
+/* Transparenz erhalten: WebP wenn möglich, sonst PNG. Ohne Alpha reicht JPEG. */
+async function encode(cv, hasAlpha) {
+  if (!hasAlpha) return canvasToBlob(cv, 'image/jpeg', 0.82);
+  if (await webpOK()) {
+    const b = await canvasToBlob(cv, 'image/webp', 0.85);
+    if (b) return b;
+  }
+  return canvasToBlob(cv, 'image/png');
+}
+
 function alphaBounds(ctx, w, h) {
   const d = ctx.getImageData(0, 0, w, h).data;
   let minX = w, minY = h, maxX = -1, maxY = -1, transparent = 0;
@@ -135,11 +253,9 @@ function alphaBounds(ctx, w, h) {
     }
   }
   if (maxX < 0) return null;
-  const ratio = transparent / (w * h);
-  return { minX, minY, maxX, maxY, cut: ratio > 0.02 };
+  return { minX, minY, maxX, maxY, cut: transparent / (w * h) > 0.02 };
 }
 
-/* Liest die auffälligsten Farben aus den undurchsichtigen Pixeln. */
 function extractColors(ctx, w, h, max = 3) {
   const d = ctx.getImageData(0, 0, w, h).data;
   const buckets = new Map();
@@ -160,8 +276,7 @@ function extractColors(ctx, w, h, max = 3) {
   return out.map(c => '#' + c.map(v => pad2(v.toString(16))).join(''));
 }
 
-/* Datei/Blob → zugeschnittenes Bild + Farben. Behält Transparenz als PNG. */
-async function prepItemImage(src, max = 900) {
+async function prepItemImage(src, max = 760) {
   const url = typeof src === 'string' ? src : URL.createObjectURL(src);
   let img;
   try { img = await loadImg(url); }
@@ -189,77 +304,144 @@ async function prepItemImage(src, max = 900) {
   octx.drawImage(cv, bx, by, bw, bh, 0, 0, out.width, out.height);
 
   const colors = extractColors(octx, out.width, out.height);
-  const blob = cut ? await canvasToBlob(out, 'image/png')
-                   : await canvasToBlob(out, 'image/jpeg', 0.85);
+  const blob = await encode(out, cut);
   return { blob, colors, cut, ar: out.height / out.width };
 }
 
-/* Körperfoto: nur verkleinern, nichts zuschneiden. */
-async function prepBodyImage(file, max = 1400) {
-  const url = URL.createObjectURL(file);
-  let img;
-  try { img = await loadImg(url); }
-  finally { setTimeout(() => URL.revokeObjectURL(url), 0); }
-  const k = Math.min(1, max / Math.max(img.width, img.height));
-  const cv = document.createElement('canvas');
-  cv.width = Math.max(1, Math.round(img.width * k));
-  cv.height = Math.max(1, Math.round(img.height * k));
-  cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-  return { blob: await canvasToBlob(cv, 'image/jpeg', 0.85), ratio: cv.height / cv.width };
+/* ================= Collage =================
+   Zweispaltige Komposition nach dem Vorbild klassischer Outfit-Collagen:
+   links die Silhouette (Oberteil über Unterteil bzw. Kleid), rechts die Ebenen
+   (Jacke, Tasche, Schuhe), Accessoires schweben in den Ecken. Die Spalten
+   überlappen sich leicht, das erzeugt Tiefe statt Rasteroptik. */
+const COLLAGE_AR = 1.25;          /* Höhe/Breite der Collage, 4:5 */
+const K = 1 / COLLAGE_AR;         /* Breitenanteil → Höhenanteil */
+const ROLE_WEIGHT = { base_top: 1.0, base_bottom: 1.45, base_full: 2.3,
+                      layer: 1.45, bag: 0.85, shoes: 0.72, acc: 0.5 };
+const LEFT_REF = 2.45, RIGHT_REF = 2.60;  /* Vollbesetzung, damit Teile nicht aufblähen */
+const ACC_BOXES = [
+  { x0: 0.04, x1: 0.36, y0: 0.02, y1: 0.15 },
+  { x0: 0.04, x1: 0.32, y0: 0.80, y1: 0.93 }
+];
+const avg = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
+
+function packColumn(list, x0, x1, yTop, yBot, refW, z) {
+  if (!list.length) return [];
+  const totalW = list.reduce((s, it) => s + ROLE_WEIGHT[CATS[it.cat].role], 0);
+  const full = yBot - yTop;
+  const used = full * Math.min(1, totalW / refW);
+  let y = yTop + (full - used) / 2;
+  return list.map(it => {
+    const h = used * (ROLE_WEIGHT[CATS[it.cat].role] / totalW);
+    const box = { x0, x1, y0: y, y1: y + h, z };
+    y += h;
+    return { it, box };
+  });
+}
+/* Seitenverhältnis erhalten und mittig in die Box legen */
+function fitInBox(it, box, shrink = 0.98) {
+  const bw = (box.x1 - box.x0) * shrink;
+  const bh = (box.y1 - box.y0) * shrink;
+  const ar = it.ar || 1.2;
+  let fw = bw, fh = fw * ar * K;
+  if (fh > bh) { fh = bh; fw = fh / (ar * K); }
+  return { left: (box.x0 + box.x1) / 2 - fw / 2, top: (box.y0 + box.y1) / 2 - fh / 2,
+           w: fw, h: fh, z: box.z };
+}
+function collageLayout(items) {
+  const byRole = {};
+  items.forEach(it => { const r = CATS[it.cat].role; (byRole[r] = byRole[r] || []).push(it); });
+  const left = byRole.base_full ? byRole.base_full
+    : [].concat(byRole.base_top || [], byRole.base_bottom || []);
+  const right = [].concat(byRole.layer || [], byRole.bag || [], byRole.shoes || []);
+  const placed = [
+    ...packColumn(left, 0.05, 0.58, 0.13, 0.96, LEFT_REF, 1),
+    ...packColumn(right, 0.43, 0.98, 0.04, 0.91, RIGHT_REF, 2)
+  ].map(p => ({ it: p.it, r: fitInBox(p.it, p.box) }));
+  (byRole.acc || []).slice(0, 2).forEach((it, i) => {
+    placed.push({ it, r: fitInBox(it, Object.assign({ z: 3 }, ACC_BOXES[i])) });
+  });
+  return placed;
+}
+function collageHTML(items, opt = {}) {
+  if (!items || !items.length) return '<p class="hint">Keine Teile für diese Collage.</p>';
+  const pieces = collageLayout(items).map(p =>
+    `<div class="cpiece" style="left:${pct(p.r.left)}; top:${pct(p.r.top)}; width:${pct(p.r.w)}; height:${pct(p.r.h)}; z-index:${p.r.z}">
+       <img data-pic="${p.it.picId}" alt="${esc(p.it.name || CATS[p.it.cat].label)}"></div>`).join('');
+  return `<div class="collage"${opt.onclick ? ` onclick="${opt.onclick}"` : ''}>${pieces}</div>`;
 }
 
-/* ================= Paper-Doll ================= */
-const calDone = () => {
-  const b = DB.body;
-  return !!(b && b.picId && b.cal && CAL_PTS.every(p => b.cal[p.key]));
+/* ================= Vorschlagslogik ================= */
+const poolFor = season => DB.items.filter(it => !it.seasons || !it.seasons.length || it.seasons.includes(season));
+const trendWorlds = () => new Set(DB.trends.flatMap(t => (t.colors || []).map(colorWorld))
+  .filter(w => w !== 'neutral'));
+/* Wärme bestimmen Basis und Jacke – Tasche und Kette sind dafür irrelevant */
+const warmthOf = items => {
+  const rel = items.filter(i => ['base_top','base_bottom','base_full','layer'].includes(CATS[i.cat].role));
+  return avg(rel.map(i => i.warmth || 3));
 };
-function calGeom() {
-  const c = DB.body.cal;
-  return {
-    cx: (c.shoulderL.x + c.shoulderR.x) / 2,
-    shW: Math.abs(c.shoulderR.x - c.shoulderL.x),
-    shY: (c.shoulderL.y + c.shoulderR.y) / 2,
-    waistY: c.waist.y, crotchY: c.crotch.y, kneeY: c.knee.y, floorY: c.floor.y
-  };
-}
-function dollLayout(item) {
-  const meta = CATS[item.cat] || CATS.top;
-  const g = calGeom();
-  const fit = item.fit || {};
-  const w = g.shW * meta.w * (fit.scale || 1);
-  const left = g.cx + (fit.dx || 0) - w / 2;
-  /* Höhe explizit setzen, damit sich die Länge unabhängig von der Breite justieren lässt.
-     w ist ein Anteil der Container-Breite, height ein Anteil der Höhe – daher /bodyRatio. */
-  const bodyRatio = (DB.body && DB.body.ratio) || 1.5;
-  const h = w * (item.ar || 1.4) * (fit.sy || 1) / bodyRatio;
-  let vert;
-  if (meta.anchor === 'floor') {
-    vert = `bottom:${pct(1 - clamp(g.floorY + (fit.dy || 0), 0, 1.5))}`;
-  } else {
-    const base = meta.anchor === 'waist' ? g.waistY - 0.015
-               : meta.anchor === 'neck'  ? g.shY - 0.075
-               : g.shY - 0.015;
-    vert = `top:${pct(base + (fit.dy || 0))}`;
+
+function drawOutfit(pool, opts) {
+  const byRole = {};
+  pool.forEach(it => { const r = CATS[it.cat].role; (byRole[r] = byRole[r] || []).push(it); });
+  const tops = byRole.base_top || [], bottoms = byRole.base_bottom || [],
+        dresses = byRole.base_full || [], shoes = byRole.shoes || [],
+        layers = byRole.layer || [], bags = byRole.bag || [], accs = byRole.acc || [];
+  if (!shoes.length) return null;
+  const canPair = tops.length && bottoms.length;
+  const useDress = dresses.length && (!canPair || Math.random() < 0.22);
+  if (!useDress && !canPair) return null;
+  const base = useDress ? [pick(dresses)] : [pick(tops), pick(bottoms)];
+  const out = base.concat([pick(shoes)]);
+  const target = SEASON_WARMTH[opts.season];
+  if (layers.length && warmthOf(base) < target + 0.4 && (target >= 3 || Math.random() < 0.35)) {
+    out.push(pick(layers));
   }
-  return `left:${pct(left)}; width:${pct(w)}; height:${pct(h)}; ${vert}; z-index:${meta.z};`;
+  if (bags.length && Math.random() < 0.7) out.push(pick(bags));
+  if (accs.length && Math.random() < 0.5) out.push(pick(accs));
+  return out;
+}
+/* Harte Regel des Users: höchstens drei bunte Farbwelten je Outfit */
+const validOutfit = items => outfitWorlds(items).length <= MAX_WORLDS;
+
+function scoreOutfit(items, opts) {
+  const worlds = outfitWorlds(items);
+  const f = items.map(i => i.formality || 3);
+  const tw = opts.trends;
+  const hit = worlds.filter(w => tw.has(w)).length;
+  let s = 100;
+  s -= worlds.length * 5;                                  /* ruhiger schlägt bunt */
+  s -= (Math.max(...f) - Math.min(...f)) * 9;              /* kein Stilbruch */
+  s -= Math.abs(avg(f) - opts.formality) * 7;              /* Anlass treffen */
+  s -= Math.abs(warmthOf(items) - SEASON_WARMTH[opts.season]) * 8;
+  s += hit * 9;                                            /* liegt im Trend */
+  return s;
 }
 
-/* items: Array von Kleidungsstücken (oder null-Einträge, die übersprungen werden) */
-function dollHTML(items, opt = {}) {
-  const b = DB.body;
-  if (!b || !b.picId) return '<p class="hint">Noch kein Körperfoto gesetzt.</p>';
-  const ratio = b.ratio || 1.6;
-  const pieces = calDone() ? (items || []).filter(Boolean).map(it =>
-    `<div class="piece" style="${dollLayout(it)}"><img data-pic="${it.picId}" alt="${esc(it.name || CATS[it.cat].label)}"></div>`
-  ).join('') : '';
-  const markers = opt.markers && b.cal ? CAL_PTS.map((p, i) => {
-    const v = b.cal[p.key];
-    return v ? `<div class="mk" style="left:${pct(v.x)}; top:${pct(v.y)}">${i + 1}</div>` : '';
-  }).join('') : '';
-  const cls = 'doll' + (opt.tap ? ' tapmode' : '');
-  const click = opt.tap ? ' onclick="App.calTap(event)"' : '';
-  return `<div class="${cls}" id="${opt.id || 'doll'}" style="max-width:${opt.maxw || 320}px; aspect-ratio:1/${ratio}"${click}>
-    <img class="base" data-pic="${b.picId}" alt="Körperfoto">${pieces}${markers}</div>`;
+function suggest(n = 3) {
+  const pool = poolFor(UI.season);
+  const opts = { season: UI.season, formality: UI.mood, trends: trendWorlds() };
+  const cands = [], seen = new Set();
+  for (let i = 0; i < 900 && cands.length < 80; i++) {
+    const o = drawOutfit(pool, opts);
+    if (!o || !validOutfit(o)) continue;
+    const key = o.map(x => x.id).sort().join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cands.push({ ids: o.map(x => x.id), score: scoreOutfit(o, opts) });
+  }
+  cands.sort((a, b) => b.score - a.score);
+  /* Vielfalt: nicht dreimal dasselbe Oberteil */
+  const out = [];
+  for (const c of cands) {
+    if (out.length >= n) break;
+    if (out.some(o => o.ids[0] === c.ids[0])) continue;
+    out.push(c);
+  }
+  for (const c of cands) {
+    if (out.length >= n) break;
+    if (!out.includes(c)) out.push(c);
+  }
+  return out;
 }
 
 /* ================= Rendern ================= */
@@ -267,42 +449,97 @@ function render() {
   document.querySelectorAll('#tabbar button').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === UI.tab));
   const main = $('#main');
-  main.innerHTML = UI.tab === 'today' ? renderToday()
+  main.innerHTML = UI.sorting ? renderSorter()
+    : UI.builder ? renderBuilder()
+    : UI.tab === 'today' ? renderToday()
     : UI.tab === 'closet' ? renderCloset()
-    : UI.tab === 'body' ? renderBody()
+    : UI.tab === 'outfits' ? renderOutfits()
+    : UI.tab === 'trends' ? renderTrends()
     : renderData();
   $('#modal-root').innerHTML = renderModal();
   hydratePics();
-  if (UI.tab === 'data') showUsage();
+  if (UI.tab === 'data' && !UI.sorting && !UI.builder) showUsage();
   saveUI();
 }
 
+const seasonChips = (active, fn) => `<div class="chips">${SEASONS.map(s =>
+  `<button class="chip ${active === s.key ? 'active' : ''}" onclick="${fn}('${s.key}')">${s.ico} ${s.label}</button>`).join('')}</div>`;
+
 function renderToday() {
   const n = DB.items.length;
-  const byCat = c => DB.items.filter(i => i.cat === c).length;
-  const ready = byCat('top') >= 2 && (byCat('bottom') >= 2 || byCat('dress') >= 1) && byCat('shoes') >= 1;
+  const pool = poolFor(UI.season);
+  if (!UI.suggestions) UI.suggestions = suggest(3);
+  const sug = UI.suggestions;
+  const moods = [[2, 'Leger'], [3, 'Normal'], [4, 'Schick']];
   return `<div class="card">
     <h2>Guten Morgen</h2>
-    <p class="hint">Die Vorschlagslogik – Wetter, Anlass, Stimmung – kommt als Nächstes.
-    Zuerst braucht sie etwas zum Kombinieren.</p>
+    <h3>Jahreszeit</h3>
+    ${seasonChips(UI.season, 'App.setSeason')}
+    <h3>Anlass</h3>
+    <div class="chips">${moods.map(([v, l]) =>
+      `<button class="chip ${UI.mood === v ? 'active' : ''}" onclick="App.setMood(${v})">${l}</button>`).join('')}</div>
+    <p class="small" style="margin:10px 0 0">${pool.length} von ${n} Teilen passen zur Jahreszeit.
+    Höchstens ${MAX_WORLDS} bunte Farbwelten pro Outfit.</p>
   </div>
-  <div class="card">
-    <h3>Dein Schrank</h3>
-    <p style="margin:0 0 10px"><b style="font-size:22px">${n}</b> ${n === 1 ? 'Teil' : 'Teile'} erfasst</p>
-    ${CAT_ORDER.map(c => `<div class="calrow"><span class="num">${byCat(c)}</span>
-      <span class="lbl">${CATS[c].ico} ${CATS[c].label}</span></div>`).join('')}
-    <p class="small" style="margin-top:12px">
-      ${ready ? '✓ Genug für erste Kombinationen.'
-              : 'Sinnvoll wird es ab 2 Oberteilen, 2 Hosen und einem Paar Schuhen.'}
-    </p>
-    <button class="btn primary block" onclick="App.setTab('closet')">Teile hinzufügen</button>
-  </div>
-  <div class="card">
-    <h3>Körperfoto</h3>
-    <p class="hint" style="margin:0 0 10px">${calDone()
-      ? '✓ Kalibriert – Vorschläge lassen sich auf dir darstellen.'
-      : 'Noch nicht eingerichtet. Ohne Kalibrierung gibt es nur die Collage-Ansicht.'}</p>
-    <button class="btn block" onclick="App.setTab('body')">${calDone() ? 'Prüfen' : 'Einrichten'}</button>
+  ${sug.length ? sug.map((s, i) => outfitCardHTML(s, i)).join('')
+    : `<div class="card"><p class="hint">Aus den Teilen für ${esc(SEASONS.find(x => x.key === UI.season).label)}
+       lässt sich noch nichts bauen. Es braucht mindestens ein Oberteil, ein Unterteil und ein Paar Schuhe
+       in dieser Jahreszeit – oder ein Kleid und Schuhe.</p>
+       <button class="btn block" onclick="App.setTab('closet')">Zum Schrank</button></div>`}
+  ${sug.length ? `<button class="btn primary block" onclick="App.reroll()">Neu würfeln</button>` : ''}`;
+}
+
+function outfitCardHTML(s, i) {
+  const items = s.ids.map(itemById).filter(Boolean);
+  if (!items.length) return '';
+  const worlds = outfitWorlds(items);
+  const names = items.map(it => esc(it.name || CATS[it.cat].label)).join(' · ');
+  return `<div class="card">
+    ${collageHTML(items)}
+    <p class="small" style="margin:10px 0 6px">${names}</p>
+    <div class="btn-row" style="justify-content:space-between">
+      <span class="worldtags">${worlds.length
+        ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
+        : '<span class="wtag">nur Neutral</span>'}</span>
+      <span class="btn-row">
+        <button class="btn small" onclick="App.rerollOne(${i})" aria-label="Neu würfeln">🎲</button>
+        <button class="btn small" onclick="App.likeOutfit(${i})" aria-label="Merken">👍</button>
+      </span>
+    </div>
+  </div>`;
+}
+
+/* --- Nachsortieren nach der Migration --- */
+const SORT_OPTIONS = {
+  top: ['top', 'knit', 'blouse'],
+  pants: ['pants', 'skirt'],
+  acc: ['acc', 'bag']
+};
+function renderSorter() {
+  const todo = DB.items.filter(i => i.needsSort);
+  if (!todo.length) {
+    return `<div class="card center">
+      <h2>Fertig</h2>
+      <p class="hint">Alle Teile haben jetzt eine Unterkategorie.</p>
+      <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button>
+    </div>`;
+  }
+  const it = todo[0];
+  const opts = SORT_OPTIONS[it.cat] || CAT_ORDER;
+  return `<div class="card">
+    <h2>Nachsortieren <span class="small">noch ${todo.length}</span></h2>
+    <p class="hint" style="margin:0 0 10px">Die alte Version kannte nur grobe Kategorien.
+    Tippe an, was es ist – das Teil wandert direkt weiter.</p>
+    <div class="checker"><img data-pic="${it.picId}" alt=""></div>
+    <p class="center small" style="margin:8px 0 12px">${esc(it.name || '(ohne Namen)')}</p>
+    ${opts.map(c => `<button class="btn block" style="margin-bottom:8px"
+      onclick="App.sortInto('${it.id}','${c}')">${CATS[c].ico} ${CATS[c].label}</button>`).join('')}
+    <button class="btn block" style="margin-bottom:8px" onclick="App.editItem('${it.id}')">
+      ↗︎ Andere Kategorie …</button>
+    <div class="btn-row" style="margin-top:6px">
+      <button class="btn small" onclick="App.sortSkip('${it.id}')">Später</button>
+      <button class="btn small" onclick="App.stopSort()">Abbrechen</button>
+    </div>
   </div>`;
 }
 
@@ -312,29 +549,35 @@ function renderCloset() {
   const sorted = [...list].sort((a, b) =>
     CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (b.addedAt || 0) - (a.addedAt || 0));
   const counts = c => DB.items.filter(i => i.cat === c).length;
-  return `<div class="card">
-    <div class="btn-row" style="margin-bottom:4px">
+  const todo = needsSortCount();
+  return `${todo ? `<div class="card accent">
+    <h2>${todo} ${todo === 1 ? 'Teil braucht' : 'Teile brauchen'} eine Unterkategorie</h2>
+    <p class="hint" style="margin:0 0 10px">Aus der alten Version übernommen: Oberteile sind noch nicht in
+    Tops, Strick und Blusen getrennt, Röcke stecken bei den Hosen, Taschen bei den Accessoires.</p>
+    <button class="btn primary block" onclick="App.startSort()">Jetzt nachsortieren</button>
+  </div>` : ''}
+  <div class="card">
+    <div class="btn-row">
       <button class="btn primary" onclick="App.addItem('camera')">📷 Foto machen</button>
       <button class="btn" onclick="App.addItem('library')">🖼️ Aus Fotos</button>
       <button class="btn" onclick="App.pasteItem()">📋 Einfügen</button>
     </div>
-    <p class="small" style="margin:8px 0 0">
-      Bester Weg auf dem iPhone: Teil in der Fotos-App lange antippen → <b>Motiv kopieren</b> → hier auf
-      <b>Einfügen</b>. Dann ist der Hintergrund schon weg.</p>
+    <p class="small" style="margin:8px 0 0">Auf dem iPhone: Teil in der Fotos-App lange antippen →
+    <b>Motiv kopieren</b> → hier auf <b>Einfügen</b>.</p>
   </div>
   <div class="card">
     <div class="chips">
       <button class="chip ${f === 'all' ? 'active' : ''}" onclick="App.filterCloset('all')">Alle ${DB.items.length}</button>
-      ${CAT_ORDER.filter(c => counts(c) > 0).map(c =>
-        `<button class="chip ${f === c ? 'active' : ''}" onclick="App.filterCloset('${c}')">${CATS[c].ico} ${counts(c)}</button>`).join('')}
+      ${CAT_ORDER.filter(c => counts(c)).map(c =>
+        `<button class="chip ${f === c ? 'active' : ''}" onclick="App.filterCloset('${c}')">${CATS[c].ico} ${CATS[c].kurz} ${counts(c)}</button>`).join('')}
     </div>
     ${sorted.length ? `<div class="grid">${sorted.map(tileHTML).join('')}</div>`
-      : `<p class="hint">Noch nichts drin. Fang mit den Teilen an, die du wirklich oft trägst –
-         15 Stück reichen für den Anfang.</p>`}
+      : '<p class="hint">Noch nichts in dieser Kategorie.</p>'}
   </div>`;
 }
-function tileHTML(it) {
-  return `<div class="tile" onclick="App.editItem('${it.id}')">
+function tileHTML(it, onclick) {
+  return `<div class="tile" onclick="${onclick || `App.editItem('${it.id}')`}">
+    ${it.needsSort ? '<span class="dot" title="Unterkategorie fehlt"></span>' : ''}
     <div class="thumbwrap"><img data-pic="${it.picId}" alt="${esc(it.name || '')}"></div>
     <div class="swatches">${(it.colors || []).map(c =>
       `<span class="sw" style="background:${esc(c)}"></span>`).join('')}</div>
@@ -342,63 +585,123 @@ function tileHTML(it) {
   </div>`;
 }
 
-function renderBody() {
-  const b = DB.body;
-  if (!b || !b.picId) {
-    return `<div class="card">
-      <h2>Körperfoto</h2>
-      <p class="hint">Grundlage für die Darstellung: ein Ganzkörperfoto von dir. Es bleibt auf
-      diesem Gerät und wird nirgendwohin hochgeladen.</p>
-      <h3>Für ein brauchbares Ergebnis</h3>
-      <ul class="hint" style="margin:0 0 12px; padding-left:20px">
-        <li>Ganzer Körper im Bild, Füße und Kopf komplett</li>
-        <li>Gerade stehen, Arme locker am Körper</li>
-        <li>Enge Kleidung, ruhiger Hintergrund</li>
-        <li>Handy auf Brusthöhe, nicht von schräg oben</li>
-      </ul>
-      <button class="btn primary block" onclick="App.chooseBody()">Körperfoto wählen</button>
-    </div>`;
-  }
-  const done = CAL_PTS.filter(p => b.cal && b.cal[p.key]).length;
-  const tapping = UI.calIdx >= 0;
-  const cur = tapping ? CAL_PTS[UI.calIdx] : null;
+function renderOutfits() {
+  const list = [...DB.outfits].reverse();
   return `<div class="card">
-    <h2>Kalibrierung <span class="small">${done}/${CAL_PTS.length}</span></h2>
-    ${tapping
-      ? `<p class="hint" style="margin:0 0 8px"><b>${esc(cur.label)}</b> antippen – ${esc(cur.hint)}.</p>`
-      : `<p class="hint" style="margin:0 0 8px">${done === CAL_PTS.length
-          ? 'Fertig. Tippe einen Punkt an, um ihn zu korrigieren.'
-          : 'Sechs Punkte antippen, damit Kleidung an der richtigen Stelle landet.'}</p>`}
-    ${dollHTML(UI.testOutfit ? UI.testOutfit.map(itemById) : [], { markers: true, tap: tapping, maxw: 340 })}
-    <div class="callist">
-      ${CAL_PTS.map((p, i) => {
-        const has = b.cal && b.cal[p.key];
-        return `<div class="calrow ${has ? 'done' : ''} ${UI.calIdx === i ? 'cur' : ''}" onclick="App.calStart(${i})">
-          <span class="num">${has ? '✓' : i + 1}</span>
-          <span class="lbl">${esc(p.label)}</span>
-          <span class="st">${UI.calIdx === i ? 'antippen' : has ? '' : 'offen'}</span>
-        </div>`;
-      }).join('')}
-    </div>
-    ${tapping ? `<button class="btn block" style="margin-top:10px" onclick="App.calStop()">Abbrechen</button>` : ''}
+    <h2>Deine Outfits</h2>
+    <p class="hint" style="margin:0 0 10px">Gemerkte Vorschläge aus <i>Heute</i> und Kombinationen,
+    die du selbst zusammenstellst.</p>
+    <button class="btn primary block" onclick="App.newOutfit()">Eigene Kombination bauen</button>
   </div>
-  <div class="card">
-    <h3>Prüfen</h3>
-    <p class="hint" style="margin:0 0 10px">Legt ein Beispiel-Outfit aus deinem Schrank auf das Foto.
-    Sitzt etwas daneben, lässt sich das pro Teil im Schrank feinjustieren.</p>
-    <div class="btn-row">
-      <button class="btn primary" onclick="App.testOutfit()" ${calDone() && DB.items.length ? '' : 'disabled'}>Testvorschau</button>
-      ${UI.testOutfit ? `<button class="btn" onclick="App.clearTest()">Ausziehen</button>` : ''}
+  ${list.length ? list.map(savedOutfitHTML).join('')
+    : `<div class="card"><p class="hint">Noch nichts gesammelt. Im Reiter <i>Heute</i> einen Vorschlag
+       mit 👍 merken – oder oben selbst eine Kombination bauen.</p></div>`}`;
+}
+
+function savedOutfitHTML(o) {
+  const items = o.ids.map(itemById).filter(Boolean);
+  const fehlend = o.ids.length - items.length;
+  const worlds = outfitWorlds(items);
+  const seasons = outfitSeasons(items);
+  return `<div class="card">
+    ${items.length ? collageHTML(items)
+      : '<p class="hint">Alle Teile dieses Outfits wurden inzwischen gelöscht.</p>'}
+    ${o.name ? `<p style="margin:10px 0 0; font-weight:600">${esc(o.name)}</p>` : ''}
+    <p class="small" style="margin:8px 0 8px">${items.map(it =>
+      esc(it.name || CATS[it.cat].label)).join(' · ') || '–'}</p>
+    ${fehlend ? `<p class="warn">${fehlend} ${fehlend === 1 ? 'Teil ist' : 'Teile sind'} nicht mehr im Schrank.</p>` : ''}
+    <div class="btn-row" style="justify-content:space-between">
+      <span class="worldtags">
+        ${seasons.map(k => `<span class="wtag">${SEASONS.find(s => s.key === k).ico}</span>`).join('')}
+        ${worlds.length ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
+          : '<span class="wtag">nur Neutral</span>'}
+      </span>
+      <span class="btn-row">
+        <button class="btn small" onclick="App.editOutfit('${o.id}')">Bearbeiten</button>
+        <button class="btn small danger" onclick="App.delOutfit('${o.id}')">Löschen</button>
+      </span>
     </div>
-    ${!calDone() ? '<p class="small" style="margin-top:8px">Erst alle sechs Punkte setzen.</p>'
-      : !DB.items.length ? '<p class="small" style="margin-top:8px">Erst ein paar Teile erfassen.</p>' : ''}
+    <p class="small" style="margin:8px 0 0">${o.own ? 'Selbst gebaut' : 'Gemerkt'} · ${fmtDate(o.date)}</p>
+  </div>`;
+}
+
+/* --- Baukasten für eigene Kombinationen --- */
+function slotRowHTML(slot, ids) {
+  const gewaehlt = ids.map(itemById).filter(it => it && slot.cats.includes(it.cat));
+  const max = slot.max || 1;
+  const label = !gewaehlt.length ? 'wählen' : gewaehlt.length < max ? '+ weiteres' : 'ändern';
+  return `<div class="slot">
+    <div class="slot-head">
+      <span class="slot-label">${esc(slot.label)}</span>
+      <button class="btn small" onclick="App.pickSlot('${slot.key}')">${label}</button>
+    </div>
+    ${gewaehlt.map(it => `<div class="slot-item" onclick="App.unpick('${it.id}')">
+      <img data-pic="${it.picId}" alt=""><span>${esc(it.name || CATS[it.cat].label)}</span>
+      <span class="x">✕</span></div>`).join('')}
+  </div>`;
+}
+
+function renderBuilder() {
+  const b = UI.builder;
+  const items = b.ids.map(itemById).filter(Boolean);
+  const worlds = outfitWorlds(items);
+  const seasons = outfitSeasons(items);
+  const zuBunt = worlds.length > MAX_WORLDS;
+  return `<div class="card">
+    <div class="sheet-head">
+      <h2>${b.editId ? 'Outfit bearbeiten' : 'Eigene Kombination'}</h2>
+      <button class="btn small" onclick="App.closeBuilder()">Abbrechen</button>
+    </div>
+    ${items.length ? collageHTML(items)
+      : '<div class="collage empty"><span>Wähle unten die Teile aus</span></div>'}
+    <div class="slots">${SLOTS.map(s => slotRowHTML(s, b.ids)).join('')}</div>
+    <label class="fld" style="margin-top:14px">Name (optional)
+      <input type="text" value="${esc(b.name || '')}" placeholder="z. B. Bürotag im Herbst"
+        oninput="App.builderName(this.value)">
+    </label>
+    <div class="worldtags" style="margin-bottom:8px">
+      ${seasons.length ? seasons.map(k =>
+        `<span class="wtag">${SEASONS.find(s => s.key === k).ico} ${SEASONS.find(s => s.key === k).label}</span>`).join('')
+        : '<span class="wtag">keine gemeinsame Jahreszeit</span>'}
+      ${worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')}
+    </div>
+    ${zuBunt ? `<p class="warn">${worlds.length} bunte Farbwelten – über deiner Regel von ${MAX_WORLDS}.
+      Speichern geht trotzdem, automatisch vorgeschlagen würde diese Kombination aber nicht.</p>` : ''}
+    <button class="btn primary block" style="margin-top:6px" onclick="App.saveOutfit()"
+      ${items.length < 2 ? 'disabled' : ''}>Speichern</button>
+    ${items.length < 2 ? '<p class="small center">Mindestens zwei Teile auswählen.</p>' : ''}
+  </div>`;
+}
+
+function renderTrends() {
+  const t = DB.trends;
+  const worlds = [...trendWorlds()];
+  return `<div class="card">
+    <h2>Trends</h2>
+    <p class="hint">Pinterest lässt sich technisch nicht direkt anzapfen – die API braucht eine
+    freigegebene Server-App, und Safari blockiert den direkten Zugriff. Der Weg, der funktioniert:</p>
+    <ol class="hint" style="margin:8px 0 12px; padding-left:20px">
+      <li>Pin in Pinterest öffnen → Teilen → <b>Bild sichern</b></li>
+      <li>Hier unten auf <b>Aus Fotos</b> und den Pin auswählen</li>
+    </ol>
+    <div class="btn-row">
+      <button class="btn primary" onclick="App.addTrend('library')">🖼️ Aus Fotos</button>
+      <button class="btn" onclick="App.pasteTrend()">📋 Einfügen</button>
+    </div>
   </div>
+  ${worlds.length ? `<div class="card">
+    <h3>Deine aktuellen Farbwelten</h3>
+    <span class="worldtags">${worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')}</span>
+    <p class="small" style="margin:10px 0 0">Outfits in diesen Welten werden bei den Vorschlägen bevorzugt.</p>
+  </div>` : ''}
   <div class="card">
-    <h3>Foto</h3>
-    <div class="btn-row">
-      <button class="btn" onclick="App.chooseBody()">Anderes Foto</button>
-      <button class="btn danger" onclick="App.resetCal()">Kalibrierung zurücksetzen</button>
-    </div>
+    <h3>Gesammelte Pins ${t.length ? '· ' + t.length : ''}</h3>
+    ${t.length ? `<div class="grid">${t.map(x => `<div class="tile" onclick="App.delTrend('${x.id}')">
+        <div class="thumbwrap plain"><img data-pic="${x.picId}" alt=""></div>
+        <div class="swatches">${(x.colors || []).map(c => `<span class="sw" style="background:${esc(c)}"></span>`).join('')}</div>
+      </div>`).join('')}</div>
+      <p class="small" style="margin:10px 0 0">Zum Löschen antippen.</p>`
+      : '<p class="hint">Noch keine Pins gesammelt.</p>'}
   </div>`;
 }
 
@@ -406,8 +709,8 @@ function renderData() {
   const n = DB.items.length;
   return `<div class="card">
     <h2>Daten</h2>
-    <p class="hint">Alles liegt auf diesem Gerät: ${n} ${n === 1 ? 'Teil' : 'Teile'}${DB.body ? ' und dein Körperfoto' : ''}.
-    Ein Backup ist sinnvoll, bevor du Safari-Daten löschst oder das Handy wechselst.</p>
+    <p class="hint">Alles liegt auf diesem Gerät: ${n} ${n === 1 ? 'Teil' : 'Teile'}, ${DB.trends.length} Pins,
+    ${DB.outfits.length} gemerkte Outfits.</p>
     <p class="small" id="usage">Speicher wird ermittelt …</p>
   </div>
   <div class="card">
@@ -416,10 +719,16 @@ function renderData() {
       <button class="btn primary" onclick="App.exportData(true)">Export mit Bildern</button>
       <button class="btn" onclick="App.exportData(false)">Nur Daten</button>
     </div>
-    <p class="small" style="margin-top:8px">Mit Bildern wird die Datei groß (ca. 150 KB pro Teil), ist dafür
-    aber ein vollständiges Backup.</p>
     <h3>Zurückholen</h3>
     <button class="btn block" onclick="App.chooseImport()">Backup einlesen</button>
+  </div>
+  <div class="card">
+    <h3>Bilder verkleinern</h3>
+    <p class="hint" style="margin:0 0 10px">Rechnet alle gespeicherten Bilder neu und kleiner.
+    Spart deutlich Platz, die Qualität reicht für die Collage weiterhin. Dauert bei vielen Teilen
+    ein bis zwei Minuten.</p>
+    <button class="btn block" onclick="App.optimize()">Jetzt verkleinern</button>
+    <p class="small" id="optout"></p>
   </div>
   <div class="card">
     <h3>Aufräumen</h3>
@@ -429,10 +738,11 @@ function renderData() {
 
 /* ================= Modal ================= */
 function renderModal() {
+  if (UI.modal === 'pick') return renderPicker();
   if (UI.modal !== 'item' || !UI.draft) return '';
   const d = UI.draft;
   const isNew = !itemById(d.id);
-  const showFit = calDone();
+  const worlds = itemWorlds(d);
   return `<div class="overlay" onclick="App.cancelItem()"><div class="sheet" onclick="event.stopPropagation()">
     <div class="sheet-head">
       <h2>${isNew ? 'Neues Teil' : 'Teil bearbeiten'}</h2>
@@ -441,15 +751,22 @@ function renderModal() {
     <div class="checker"><img data-pic="${d.picId}" alt=""></div>
     ${d.cut ? '' : `<p class="warn" style="margin:8px 0 0">Hintergrund ist noch dran. Tipp: in der Fotos-App
       das Teil lange antippen, <b>Motiv kopieren</b>, dann hier <b>Einfügen</b>.</p>`}
-    <div class="chips" style="margin-top:12px">
+    <h3>Kategorie</h3>
+    <div class="chips">
       ${CAT_ORDER.map(c => `<button class="chip ${d.cat === c ? 'active' : ''}"
         onclick="App.draftSet('cat','${c}')">${CATS[c].ico} ${CATS[c].label}</button>`).join('')}
     </div>
-    <label class="fld">Name (optional)
+    <label class="fld" style="margin-top:12px">Name (optional)
       <input type="text" value="${esc(d.name || '')}" placeholder="${esc(CATS[d.cat].label)}"
         oninput="App.draftSet('name', this.value, true)">
     </label>
-    <label class="fld">Wärme
+    <h3>Jahreszeiten</h3>
+    <p class="small" style="margin:0 0 6px">Mehrfachauswahl – ein Teil darf zu mehreren passen.</p>
+    <div class="chips">
+      ${SEASONS.map(s => `<button class="chip ${(d.seasons || []).includes(s.key) ? 'active' : ''}"
+        onclick="App.draftSeason('${s.key}')">${s.ico} ${s.label}</button>`).join('')}
+    </div>
+    <label class="fld" style="margin-top:12px">Wärme
       <div class="slider-row">
         <input type="range" min="1" max="5" step="1" value="${d.warmth}"
           oninput="App.draftSlide('warmth', +this.value)">
@@ -464,46 +781,31 @@ function renderModal() {
       </div>
     </label>
     <h3>Farben</h3>
-    <div class="btn-row">
-      <div class="swatches" style="justify-content:flex-start">
-        ${(d.colors || []).map(c => `<span class="sw" style="width:22px; height:22px; background:${esc(c)}"></span>`).join('')
-          || '<span class="small">keine erkannt</span>'}
-      </div>
+    <div class="swatches" style="justify-content:flex-start">
+      ${(d.colors || []).map(c => `<span class="sw big" style="background:${esc(c)}"></span>`).join('')
+        || '<span class="small">keine erkannt</span>'}
     </div>
-    ${showFit ? `<h3>Sitz auf dem Körperfoto</h3>
-    ${dollHTML([d], { maxw: 190, id: 'fitdoll' })}
-    <label class="fld" style="margin-top:10px">Breite
-      <div class="slider-row">
-        <input type="range" min="0.5" max="1.8" step="0.02" value="${d.fit.scale}"
-          oninput="App.draftSlide('fit.scale', +this.value)">
-        <span class="val" data-out="fit.scale">${Math.round(d.fit.scale * 100)} %</span>
-      </div>
-    </label>
-    <label class="fld">Länge
-      <div class="slider-row">
-        <input type="range" min="0.5" max="2" step="0.02" value="${d.fit.sy}"
-          oninput="App.draftSlide('fit.sy', +this.value)">
-        <span class="val" data-out="fit.sy">${Math.round(d.fit.sy * 100)} %</span>
-      </div>
-    </label>
-    <label class="fld">Seitlich
-      <div class="slider-row">
-        <input type="range" min="-0.25" max="0.25" step="0.005" value="${d.fit.dx}"
-          oninput="App.draftSlide('fit.dx', +this.value)">
-        <span class="val" data-out="fit.dx">${fmtNudge(d.fit.dx)}</span>
-      </div>
-    </label>
-    <label class="fld">Höhe
-      <div class="slider-row">
-        <input type="range" min="-0.2" max="0.2" step="0.005" value="${d.fit.dy}"
-          oninput="App.draftSlide('fit.dy', +this.value)">
-        <span class="val" data-out="fit.dy">${fmtNudge(d.fit.dy)}</span>
-      </div>
-    </label>`
-    : `<p class="small" style="margin-top:14px">Sobald ein Körperfoto kalibriert ist, kannst du hier den
-       Sitz justieren.</p>`}
+    <span class="worldtags" style="margin-top:8px; display:inline-block">${worlds.length
+      ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
+      : '<span class="wtag">Neutral</span>'}</span>
     <button class="btn primary block" style="margin-top:14px" onclick="App.saveItem()">Speichern</button>
-    ${isNew ? '' : `<button class="btn danger block" onclick="App.deleteItem()">Teil löschen</button>`}
+    ${isNew ? '' : '<button class="btn danger block" onclick="App.deleteItem()">Teil löschen</button>'}
+  </div></div>`;
+}
+
+function renderPicker() {
+  const slot = SLOTS.find(s => s.key === UI.picker);
+  if (!slot) return '';
+  const list = DB.items.filter(i => slot.cats.includes(i.cat))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return `<div class="overlay" onclick="App.closePick()"><div class="sheet" onclick="event.stopPropagation()">
+    <div class="sheet-head">
+      <h2>${esc(slot.label)} wählen</h2>
+      <button class="btn small" onclick="App.closePick()">Abbrechen</button>
+    </div>
+    ${list.length ? `<div class="grid">${list.map(it =>
+        tileHTML(it, `App.choosePick(&#39;${it.id}&#39;)`)).join('')}</div>`
+      : '<p class="hint">In dieser Kategorie ist noch nichts im Schrank.</p>'}
   </div></div>`;
 }
 
@@ -521,8 +823,114 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.remove(), 2600);
 }
 
-App.setTab = tab => { UI.tab = tab; UI.modal = null; UI.calIdx = -1; render(); };
+App.setTab = tab => { UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; render(); };
 App.filterCloset = c => { UI.closetFilter = c; render(); };
+App.setSeason = s => { UI.season = s; UI.suggestions = null; render(); };
+App.setMood = v => { UI.mood = v; UI.suggestions = null; render(); };
+App.reroll = () => { UI.suggestions = suggest(3); render(); };
+App.rerollOne = i => {
+  const fresh = suggest(6).filter(c =>
+    !UI.suggestions.some((o, j) => j !== i && o.ids.join() === c.ids.join()));
+  if (fresh.length) UI.suggestions[i] = pick(fresh);
+  render();
+};
+App.likeOutfit = i => {
+  const s = UI.suggestions[i];
+  if (!s) return;
+  if (DB.outfits.some(o => outfitKey(o.ids) === outfitKey(s.ids))) {
+    toast('Hast du schon gemerkt');
+    return;
+  }
+  DB.outfits.push({ id: uid(), date: todayISO(), ids: [...s.ids], liked: true });
+  save();
+  toast('Outfit gemerkt');
+};
+
+/* --- Gemerkte Outfits und eigener Baukasten --- */
+App.newOutfit = () => { UI.builder = { ids: [], name: '', editId: null }; render(); };
+App.editOutfit = id => {
+  const o = DB.outfits.find(x => x.id === id);
+  if (!o) return;
+  UI.builder = { ids: o.ids.filter(itemById), name: o.name || '', editId: o.id };
+  render();
+};
+App.closeBuilder = () => { UI.builder = null; UI.picker = null; UI.modal = null; render(); };
+/* Kein render(): sonst verliert das Textfeld beim Tippen den Fokus */
+App.builderName = v => { if (UI.builder) UI.builder.name = v; };
+App.pickSlot = key => { UI.picker = key; UI.modal = 'pick'; render(); };
+App.closePick = () => { UI.picker = null; UI.modal = null; render(); };
+App.choosePick = id => {
+  const it = itemById(id);
+  const slot = SLOTS.find(s => s.key === UI.picker);
+  if (!it || !slot || !UI.builder) return;
+  const b = UI.builder;
+  const max = slot.max || 1;
+  /* Ist der Slot voll, fliegt der älteste Eintrag raus */
+  const imSlot = b.ids.map(itemById).filter(o => o && slot.cats.includes(o.cat) && o.id !== id);
+  const behalten = imSlot.slice(Math.max(0, imSlot.length - (max - 1))).map(o => o.id);
+  let ids = b.ids.filter(x => { const o = itemById(x); return o && !slot.cats.includes(o.cat); })
+    .concat(behalten, [id]);
+  /* Kleid und Oberteil/Unterteil schließen einander aus */
+  const rolle = x => { const o = itemById(x); return o ? CATS[o.cat].role : null; };
+  if (slot.key === 'base_full') ids = ids.filter(x => !['base_top', 'base_bottom'].includes(rolle(x)));
+  else if (slot.key === 'base_top' || slot.key === 'base_bottom') ids = ids.filter(x => rolle(x) !== 'base_full');
+  b.ids = ids;
+  UI.picker = null; UI.modal = null;
+  render();
+};
+App.unpick = id => {
+  if (!UI.builder) return;
+  UI.builder.ids = UI.builder.ids.filter(x => x !== id);
+  render();
+};
+App.saveOutfit = () => {
+  const b = UI.builder;
+  if (!b) return;
+  const items = b.ids.map(itemById).filter(Boolean);
+  if (items.length < 2) return;
+  if (b.editId) {
+    const o = DB.outfits.find(x => x.id === b.editId);
+    if (o) { o.ids = [...b.ids]; o.name = b.name || ''; }
+  } else {
+    if (DB.outfits.some(o => outfitKey(o.ids) === outfitKey(b.ids))) {
+      toast('Diese Kombination hast du schon');
+      return;
+    }
+    DB.outfits.push({ id: uid(), date: todayISO(), ids: [...b.ids],
+      name: b.name || '', own: true, liked: true });
+  }
+  save();
+  UI.builder = null; UI.tab = 'outfits';
+  toast('Gespeichert');
+  render();
+};
+App.delOutfit = id => {
+  if (!confirm('Dieses Outfit aus der Liste entfernen?')) return;
+  DB.outfits = DB.outfits.filter(o => o.id !== id);
+  save();
+  render();
+};
+
+/* --- Nachsortieren --- */
+App.startSort = () => { UI.sorting = true; render(); };
+App.stopSort = () => { UI.sorting = false; render(); };
+App.sortInto = (id, cat) => {
+  const it = itemById(id);
+  if (!it) return;
+  it.cat = cat;
+  delete it.needsSort;
+  save();
+  UI.suggestions = null;
+  render();
+};
+App.sortSkip = id => {
+  const it = itemById(id);
+  if (!it) return;
+  /* ans Ende der Warteschlange, ohne die Markierung zu verlieren */
+  DB.items = DB.items.filter(x => x.id !== id).concat([it]);
+  save();
+  render();
+};
 
 /* --- Teil hinzufügen --- */
 App.addItem = source => {
@@ -538,20 +946,21 @@ App.itemFileChosen = async input => {
   input.value = '';
   await startDraftFrom(file);
 };
-App.pasteItem = async () => {
+App.pasteItem = () => pasteImage(startDraftFrom);
+async function pasteImage(handler) {
   try {
     if (!navigator.clipboard || !navigator.clipboard.read) throw new Error('unsupported');
     const items = await navigator.clipboard.read();
     for (const it of items) {
       const type = it.types.find(t => t.startsWith('image/'));
-      if (type) { await startDraftFrom(await it.getType(type)); return; }
+      if (type) { await handler(await it.getType(type)); return; }
     }
     toast('In der Zwischenablage ist kein Bild');
   } catch (e) {
     console.warn('Einfügen fehlgeschlagen', e);
     toast('Einfügen ging nicht – nimm „Aus Fotos"');
   }
-};
+}
 async function startDraftFrom(blob) {
   toast('Bild wird vorbereitet …');
   try {
@@ -560,8 +969,8 @@ async function startDraftFrom(blob) {
     await picPut(picId, out);
     UI.draft = {
       id: uid(), picId, colors, cut, ar, cat: 'top', name: '',
-      warmth: CATS.top.warmth, formality: 3,
-      fit: { dx: 0, dy: 0, scale: 1, sy: 1 }, addedAt: Date.now(), _newPic: true
+      warmth: CATS.top.warmth, formality: 3, seasons: seasonsFromWarmth(CATS.top.warmth),
+      addedAt: Date.now(), _newPic: true
     };
     UI.modal = 'item';
     document.querySelector('.toast')?.remove();
@@ -576,41 +985,45 @@ App.editItem = id => {
   const it = itemById(id);
   if (!it) return;
   UI.draft = JSON.parse(JSON.stringify(it));
-  UI.draft.fit = Object.assign({ dx: 0, dy: 0, scale: 1, sy: 1 }, UI.draft.fit);
+  UI.draft.seasons = UI.draft.seasons || seasonsFromWarmth(UI.draft.warmth || 3);
   UI.modal = 'item';
   render();
 };
 App.draftSet = (key, val, quiet) => {
-  if (!UI.draft) return;
-  if (key === 'cat' && UI.draft.cat !== val) UI.draft.warmth = CATS[val].warmth;
-  UI.draft[key] = val;
+  const d = UI.draft;
+  if (!d) return;
+  if (key === 'cat' && d.cat !== val) {
+    d.warmth = CATS[val].warmth;
+    d.seasons = seasonsFromWarmth(d.warmth);
+    delete d.needsSort;
+  }
+  d[key] = val;
   if (!quiet) render();
+};
+App.draftSeason = key => {
+  const d = UI.draft;
+  if (!d) return;
+  d.seasons = d.seasons || [];
+  d.seasons = d.seasons.includes(key) ? d.seasons.filter(s => s !== key) : d.seasons.concat([key]);
+  render();
 };
 /* Schieberegler dürfen nicht neu rendern – sonst verliert der Finger beim Ziehen das Element. */
 App.draftSlide = (path, val) => {
   const d = UI.draft;
   if (!d) return;
-  if (path.startsWith('fit.')) {
-    d.fit[path.slice(4)] = val;
-    const piece = $('#fitdoll .piece');
-    if (piece) piece.setAttribute('style', dollLayout(d));
-  } else {
-    d[path] = val;
-  }
+  d[path] = val;
   const out = document.querySelector(`#modal-root .val[data-out="${path}"]`);
-  if (out) out.textContent = path === 'warmth' ? WARMTH_LBL[val]
-    : path === 'formality' ? FORMAL_LBL[val]
-    : (path === 'fit.scale' || path === 'fit.sy') ? Math.round(val * 100) + ' %'
-    : fmtNudge(val);
+  if (out) out.textContent = path === 'warmth' ? WARMTH_LBL[val] : FORMAL_LBL[val];
 };
 App.saveItem = () => {
   const d = UI.draft;
   if (!d) return;
   delete d._newPic;
+  if (!d.seasons || !d.seasons.length) d.seasons = seasonsFromWarmth(d.warmth);
   const ex = DB.items.findIndex(i => i.id === d.id);
   if (ex >= 0) DB.items[ex] = d; else DB.items.push(d);
   save();
-  UI.modal = null; UI.draft = null;
+  UI.modal = null; UI.draft = null; UI.suggestions = null;
   toast('Gespeichert');
   render();
 };
@@ -624,77 +1037,66 @@ App.deleteItem = async () => {
   const d = UI.draft;
   if (!d || !confirm('Dieses Teil wirklich löschen?')) return;
   DB.items = DB.items.filter(i => i.id !== d.id);
-  if (UI.testOutfit) UI.testOutfit = UI.testOutfit.filter(id => id !== d.id);
   save();
-  UI.modal = null; UI.draft = null;
+  UI.modal = null; UI.draft = null; UI.suggestions = null;
   dropPicURL(d.picId); await picDel(d.picId);
   render();
 };
 
-/* --- Körperfoto & Kalibrierung --- */
-App.chooseBody = () => { const i = $('#pick-body'); i.value = ''; i.click(); };
-App.bodyFileChosen = async input => {
+/* --- Trends --- */
+App.addTrend = () => { const i = $('#pick-trend'); i.value = ''; i.click(); };
+App.trendFileChosen = async input => {
   const file = input.files && input.files[0];
   if (!file) return;
   input.value = '';
-  toast('Foto wird vorbereitet …');
+  await addTrendFrom(file);
+};
+App.pasteTrend = () => pasteImage(addTrendFrom);
+async function addTrendFrom(blob) {
+  toast('Pin wird gelesen …');
   try {
-    const { blob, ratio } = await prepBodyImage(file);
-    const old = DB.body && DB.body.picId;
+    /* Pins sind Screenshots: nicht freistellen, nur verkleinern und Palette ziehen */
+    const url = URL.createObjectURL(blob);
+    const img = await loadImg(url);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    const k = Math.min(1, 620 / Math.max(img.width, img.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(img.width * k));
+    cv.height = Math.max(1, Math.round(img.height * k));
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, cv.width, cv.height);
+    const colors = extractColors(ctx, cv.width, cv.height, 5);
     const picId = uid();
-    await picPut(picId, blob);
-    DB.body = { picId, ratio, cal: {} };
+    await picPut(picId, await canvasToBlob(cv, 'image/jpeg', 0.8));
+    DB.trends.push({ id: uid(), picId, colors, addedAt: Date.now() });
     save();
-    if (old) { dropPicURL(old); await picDel(old); }
-    UI.calIdx = 0; UI.testOutfit = null;
+    UI.suggestions = null;
     document.querySelector('.toast')?.remove();
+    toast('Pin übernommen');
     render();
   } catch (e) {
     console.error(e);
-    toast('Das Foto konnte nicht gelesen werden');
+    toast('Der Pin konnte nicht gelesen werden');
   }
-};
-App.calStart = i => { UI.calIdx = UI.calIdx === i ? -1 : i; render(); };
-App.calStop = () => { UI.calIdx = -1; render(); };
-App.calTap = ev => {
-  if (UI.calIdx < 0 || !DB.body) return;
-  const box = ev.currentTarget.getBoundingClientRect();
-  const x = clamp((ev.clientX - box.left) / box.width, 0, 1);
-  const y = clamp((ev.clientY - box.top) / box.height, 0, 1);
-  DB.body.cal = DB.body.cal || {};
-  DB.body.cal[CAL_PTS[UI.calIdx].key] = { x, y };
+}
+App.delTrend = async id => {
+  const t = DB.trends.find(x => x.id === id);
+  if (!t || !confirm('Diesen Pin entfernen?')) return;
+  DB.trends = DB.trends.filter(x => x.id !== id);
   save();
-  const next = CAL_PTS.findIndex((p, i) => i > UI.calIdx && !DB.body.cal[p.key]);
-  UI.calIdx = next;
+  dropPicURL(t.picId); await picDel(t.picId);
+  UI.suggestions = null;
   render();
 };
-App.resetCal = () => {
-  if (!DB.body || !confirm('Alle sechs Punkte neu setzen?')) return;
-  DB.body.cal = {};
-  save();
-  UI.calIdx = 0; UI.testOutfit = null;
-  render();
-};
-App.testOutfit = () => {
-  const pick = c => {
-    const l = DB.items.filter(i => i.cat === c);
-    return l.length ? l[Math.floor(Math.random() * l.length)].id : null;
-  };
-  const dress = pick('dress');
-  const useDress = dress && !DB.items.some(i => i.cat === 'top');
-  UI.testOutfit = (useDress ? [dress] : [pick('top'), pick('bottom')])
-    .concat([pick('shoes'), pick('outer'), pick('acc')]).filter(Boolean);
-  if (!UI.testOutfit.length) toast('Noch keine passenden Teile');
-  render();
-};
-App.clearTest = () => { UI.testOutfit = null; render(); };
 
 /* --- Daten --- */
+const allPicIds = () => DB.items.map(i => i.picId)
+  .concat(DB.trends.map(t => t.picId)).filter(Boolean);
+
 App.exportData = async withPics => {
-  const out = { app: 'outfit', version: 1, exported: todayISO(), db: DB, pics: {} };
+  const out = { app: 'outfit', version: DB_VERSION, exported: todayISO(), db: DB, pics: {} };
   if (withPics) {
-    const ids = DB.items.map(i => i.picId).concat(DB.body ? [DB.body.picId] : []).filter(Boolean);
-    for (const id of ids) {
+    for (const id of allPicIds()) {
       const blob = await picGet(id).catch(() => null);
       if (blob) out.pics[id] = await blobToDataURL(blob);
     }
@@ -720,17 +1122,20 @@ App.importChosen = async input => {
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== 'outfit') throw new Error('Kein Outfit-Backup');
+    const incoming = migrate(data.db);
     const known = new Set(DB.items.map(i => i.id));
     let added = 0;
-    for (const it of (data.db.items || [])) {
+    for (const it of (incoming.items || [])) {
       if (known.has(it.id)) continue;
       DB.items.push(it); added++;
     }
-    if (data.db.body && !DB.body) DB.body = data.db.body;
+    const knownT = new Set(DB.trends.map(t => t.id));
+    for (const t of (incoming.trends || [])) if (!knownT.has(t.id)) DB.trends.push(t);
     for (const [id, du] of Object.entries(data.pics || {})) {
       if (!(await picGet(id).catch(() => null))) await picPut(id, dataURLtoBlob(du));
     }
     save();
+    UI.suggestions = null;
     toast(`${added} ${added === 1 ? 'Teil' : 'Teile'} übernommen`);
     render();
   } catch (e) {
@@ -738,14 +1143,48 @@ App.importChosen = async input => {
     toast('Datei konnte nicht gelesen werden');
   }
 };
+
+App.optimize = async () => {
+  /* Element jedes Mal neu suchen: der Vorgang dauert lange und der Reiter kann wechseln */
+  const say = txt => { const el = $('#optout'); if (el) el.textContent = txt; };
+  const ids = allPicIds();
+  say('0 von ' + ids.length + ' …');
+  let before = 0, after = 0, done = 0;
+  for (const id of ids) {
+    const blob = await picGet(id).catch(() => null);
+    if (!blob) continue;
+    before += blob.size;
+    try {
+      const url = URL.createObjectURL(blob);
+      const img = await loadImg(url);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      const k = Math.min(1, 760 / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(img.width * k));
+      cv.height = Math.max(1, Math.round(img.height * k));
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      const hasAlpha = blob.type === 'image/png' || blob.type === 'image/webp';
+      const out = await encode(cv, hasAlpha);
+      if (out && out.size < blob.size) { await picPut(id, out); dropPicURL(id); after += out.size; }
+      else after += blob.size;
+    } catch (e) { after += blob.size; console.warn('Bild übersprungen', id, e); }
+    done++;
+    if (done % 5 === 0) say(`${done} von ${ids.length} …`);
+  }
+  const mb = v => (v / 1048576).toFixed(1);
+  say(`Fertig: ${mb(before)} MB → ${mb(after)} MB`);
+  toast(`Bilder verkleinert: ${mb(before)} → ${mb(after)} MB`);
+  hydratePics();
+  showUsage();
+};
+
 App.wipe = async () => {
-  if (!confirm('Wirklich alle Teile, das Körperfoto und die Kalibrierung löschen?')) return;
+  if (!confirm('Wirklich alle Teile, Pins und Outfits löschen?')) return;
   if (!confirm('Das lässt sich nicht rückgängig machen. Sicher?')) return;
-  const ids = DB.items.map(i => i.picId).concat(DB.body ? [DB.body.picId] : []).filter(Boolean);
-  for (const id of ids) { dropPicURL(id); await picDel(id); }
-  DB = { version: 1, items: [], body: null, outfits: [], prefs: {} };
+  for (const id of allPicIds()) { dropPicURL(id); await picDel(id); }
+  DB = { version: DB_VERSION, items: [], trends: [], outfits: [], prefs: {} };
   save();
-  UI.testOutfit = null; UI.calIdx = -1;
+  UI.suggestions = null; UI.sorting = false;
   render();
 };
 
@@ -761,7 +1200,7 @@ document.addEventListener('paste', ev => {
   const it = [...(ev.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
   if (!it) return;
   ev.preventDefault();
-  startDraftFrom(it.getAsFile());
+  (UI.tab === 'trends' ? addTrendFrom : startDraftFrom)(it.getAsFile());
 });
 
 render();

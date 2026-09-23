@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Outfit</title>
-<meta name="description" content="Kleiderschrank und Outfit-Vorschläge nach Wetter, Anlass und Stimmung">
+<meta name="description" content="Kleiderschrank und Outfit-Vorschläge nach Jahreszeit, Anlass und Farbwelten">
 <link rel="manifest" href="manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -23,12 +23,13 @@
 <nav id="tabbar">
   <button data-tab="today"  onclick="App.setTab('today')"><span class="ico">☀️</span><span>Heute</span></button>
   <button data-tab="closet" onclick="App.setTab('closet')"><span class="ico">👕</span><span>Schrank</span></button>
-  <button data-tab="body"   onclick="App.setTab('body')"><span class="ico">🧍</span><span>Körper</span></button>
+  <button data-tab="outfits" onclick="App.setTab('outfits')"><span class="ico">⭐</span><span>Outfits</span></button>
+  <button data-tab="trends" onclick="App.setTab('trends')"><span class="ico">📌</span><span>Trends</span></button>
   <button data-tab="data"   onclick="App.setTab('data')"><span class="ico">💾</span><span>Daten</span></button>
 </nav>
 <div id="modal-root"></div>
 <input type="file" id="pick-item" accept="image/*" hidden onchange="App.itemFileChosen(this)">
-<input type="file" id="pick-body" accept="image/*" hidden onchange="App.bodyFileChosen(this)">
+<input type="file" id="pick-trend" accept="image/*" hidden onchange="App.trendFileChosen(this)">
 <input type="file" id="pick-import" accept=".json,application/json" hidden onchange="App.importChosen(this)">
 <noscript>Diese App benötigt JavaScript.</noscript>
 <script src="app.js"></script>
