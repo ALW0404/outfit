@@ -645,12 +645,14 @@ function renderCloset() {
       ${CAT_ORDER.filter(c => counts(c)).map(c =>
         `<button class="chip ${f === c ? 'active' : ''}" onclick="App.filterCloset('${c}')">${CATS[c].ico} ${CATS[c].kurz} ${counts(c)}</button>`).join('')}
     </div>
-    ${sorted.length ? `<div class="grid">${sorted.map(tileHTML).join('')}</div>`
+    ${sorted.length ? `<div class="grid">${sorted.map(it => tileHTML(it)).join('')}</div>`
       : '<p class="hint">Noch nichts in dieser Kategorie.</p>'}
   </div>`;
 }
 function tileHTML(it, onclick) {
-  return `<div class="tile" onclick="${onclick || `App.editItem('${it.id}')`}">
+  /* Nur echte Strings zählen: bei map(tileHTML) käme sonst der Index als onclick an */
+  const action = typeof onclick === 'string' ? onclick : `App.editItem('${it.id}')`;
+  return `<div class="tile" onclick="${action}">
     ${it.needsSort ? '<span class="dot" title="Unterkategorie fehlt"></span>' : ''}
     <div class="thumbwrap"><img data-pic="${it.picId}" alt="${esc(it.name || '')}"></div>
     <div class="swatches">${(it.colors || []).map(c =>
