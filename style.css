@@ -171,3 +171,35 @@ label.fld > *{margin-top:4px; font-weight:400;}
 .btn.small.danger{background:transparent;}
 /* Fünf Reiter: etwas enger setzen, damit die Beschriftung auf 375 px passt */
 #tabbar button{font-size:10px; padding-left:2px; padding-right:2px;}
+
+/* ---------- Swipe-Karte ---------- */
+.swipe{position:relative; margin-bottom:12px;}
+.swipe-card{
+  background:var(--card); border-radius:var(--radius); padding:14px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06); position:relative;
+  touch-action:pan-y;          /* senkrecht scrollen bleibt möglich, waagerecht wischen wir */
+  user-select:none; -webkit-user-select:none;
+  will-change:transform;
+}
+.stamp{
+  position:absolute; top:18px; z-index:10; opacity:0; pointer-events:none;
+  border:3px solid; border-radius:10px; padding:5px 12px;
+  font-size:19px; font-weight:800; letter-spacing:.06em;
+  transform:rotate(-12deg);
+}
+.stamp.take{left:18px; color:var(--green); border-color:var(--green);}
+.stamp.toss{right:18px; color:var(--red); border-color:var(--red); transform:rotate(12deg);}
+.stamp.skip{left:50%; margin-left:-72px; color:var(--orange); border-color:var(--orange); transform:rotate(-4deg);}
+
+.swipe-actions{display:flex; justify-content:center; gap:18px; margin:4px 0 10px;}
+.act{
+  width:62px; height:62px; border-radius:50%; border:1px solid var(--line);
+  background:var(--card); font-family:inherit; font-size:22px; line-height:1;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  box-shadow:0 1px 3px rgba(0,0,0,.08);
+}
+.act span{font-size:9.5px; font-weight:600; letter-spacing:.02em;}
+.act.toss{color:var(--red);}
+.act.skip{color:var(--orange);}
+.act.take{color:var(--green);}
+.act:active{transform:scale(.93);}

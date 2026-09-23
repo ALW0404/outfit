@@ -112,14 +112,14 @@ const outfitSeasons = items => !items.length ? []
 /* ================= Datenbank (localStorage) ================= */
 const LS_KEY = 'outfit-v1';
 const LS_UI = 'outfit-ui';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /* v1 kannte nur top/bottom/acc – die feineren Kategorien muss der User nachsortieren. */
 const CAT_MIGRATION = { top: 'top', bottom: 'pants', acc: 'acc', dress: 'dress', outer: 'outer', shoes: 'shoes' };
 const NEEDS_SORT_FROM = new Set(['top', 'bottom', 'acc']);
 
 function migrate(d) {
-  if (!d || d.version === DB_VERSION) return d;
+  if (!d) return d;
   if (d.version === 1) {
     (d.items || []).forEach(it => {
       const old = it.cat;
@@ -130,7 +130,14 @@ function migrate(d) {
     });
     delete d.body;
     d.trends = d.trends || [];
-    d.version = DB_VERSION;
+    d.version = 2;
+  }
+  if (d.version === 2) {
+    /* Jahreszeiten waren bisher nur aus der Wärme geraten – alle zur Bestätigung vormerken */
+    (d.items || []).forEach(it => { if (it.seasonsAuto === undefined) it.seasonsAuto = true; });
+    d.tossed = d.tossed || [];
+    d.snoozed = d.snoozed || {};
+    d.version = 3;
   }
   return d;
 }
@@ -142,9 +149,17 @@ function loadDB() {
       if (d && d.version === DB_VERSION) return d;
     }
   } catch (e) { console.warn('DB laden fehlgeschlagen', e); }
-  return { version: DB_VERSION, items: [], trends: [], outfits: [], prefs: {} };
+  return { version: DB_VERSION, items: [], trends: [], outfits: [], tossed: [], snoozed: {}, prefs: {} };
 }
 let DB = loadDB();
+/* Abgelaufene „Not today"-Sperren beim Start wegräumen, sonst wächst der Speicher endlos */
+(() => {
+  const heute = todayISO();
+  const s = DB.snoozed || {};
+  let weg = 0;
+  for (const k of Object.keys(s)) if (s[k] !== heute) { delete s[k]; weg++; }
+  if (weg) localStorage.setItem(LS_KEY, JSON.stringify(DB));
+})();
 function save() {
   try { localStorage.setItem(LS_KEY, JSON.stringify(DB)); }
   catch (e) { toast('Speicher voll – bitte in Daten aufräumen'); console.error(e); }
@@ -152,14 +167,25 @@ function save() {
 
 let UI = { tab: 'today', closetFilter: 'all', season: seasonNow(), mood: 3 };
 try { Object.assign(UI, JSON.parse(localStorage.getItem(LS_UI) || '{}')); } catch (e) {}
-UI.modal = null; UI.draft = null; UI.sorting = false; UI.suggestions = null;
-UI.builder = null; UI.picker = null;
+UI.modal = null; UI.draft = null; UI.sorting = false;
+UI.builder = null; UI.picker = null; UI.queue = null;
+UI.seasonDraft = null; UI.seasonDraftId = null;
 function saveUI() {
   localStorage.setItem(LS_UI, JSON.stringify({ tab: UI.tab, closetFilter: UI.closetFilter,
     season: UI.season, mood: UI.mood }));
 }
 const itemById = id => DB.items.find(i => i.id === id);
 const needsSortCount = () => DB.items.filter(i => i.needsSort).length;
+const seasonTodoCount = () => DB.items.filter(i => i.seasonsAuto).length;
+
+/* Kombinationen, die nicht mehr vorgeschlagen werden sollen */
+function blockedKeys() {
+  const heute = todayISO();
+  const s = new Set(DB.tossed || []);
+  Object.entries(DB.snoozed || {}).forEach(([k, d]) => { if (d === heute) s.add(k); });
+  (DB.outfits || []).forEach(o => s.add(outfitKey(o.ids)));
+  return s;
+}
 
 /* ================= Bilder (IndexedDB) ================= */
 let _idb = null;
@@ -417,31 +443,29 @@ function scoreOutfit(items, opts) {
   return s;
 }
 
-function suggest(n = 3) {
+function suggest(n = 12) {
   const pool = poolFor(UI.season);
   const opts = { season: UI.season, formality: UI.mood, trends: trendWorlds() };
+  const blocked = blockedKeys();
   const cands = [], seen = new Set();
-  for (let i = 0; i < 900 && cands.length < 80; i++) {
+  for (let i = 0; i < 1400 && cands.length < 60; i++) {
     const o = drawOutfit(pool, opts);
     if (!o || !validOutfit(o)) continue;
-    const key = o.map(x => x.id).sort().join('|');
-    if (seen.has(key)) continue;
+    const key = outfitKey(o.map(x => x.id));
+    if (seen.has(key) || blocked.has(key)) continue;
     seen.add(key);
     cands.push({ ids: o.map(x => x.id), score: scoreOutfit(o, opts) });
   }
   cands.sort((a, b) => b.score - a.score);
-  /* Vielfalt: nicht dreimal dasselbe Oberteil */
-  const out = [];
-  for (const c of cands) {
-    if (out.length >= n) break;
-    if (out.some(o => o.ids[0] === c.ids[0])) continue;
-    out.push(c);
-  }
-  for (const c of cands) {
-    if (out.length >= n) break;
-    if (!out.includes(c)) out.push(c);
-  }
-  return out;
+  /* Aus den besten mischen: gute Qualität, aber nicht jeden Tag dieselbe Reihenfolge */
+  return shuffled(cands.slice(0, Math.max(n * 2, 20))).slice(0, n);
+}
+/* Nachfüllen, solange noch etwas Ungesehenes übrig ist */
+function ensureQueue() {
+  if (!UI.queue) UI.queue = [];
+  if (UI.queue.length >= 3) return;
+  const da = new Set(UI.queue.map(q => outfitKey(q.ids)));
+  suggest(12).forEach(c => { if (!da.has(outfitKey(c.ids))) UI.queue.push(c); });
 }
 
 /* ================= Rendern ================= */
@@ -458,6 +482,7 @@ function render() {
     : renderData();
   $('#modal-root').innerHTML = renderModal();
   hydratePics();
+  attachSwipe();
   if (UI.tab === 'data' && !UI.sorting && !UI.builder) showUsage();
   saveUI();
 }
@@ -466,47 +491,45 @@ const seasonChips = (active, fn) => `<div class="chips">${SEASONS.map(s =>
   `<button class="chip ${active === s.key ? 'active' : ''}" onclick="${fn}('${s.key}')">${s.ico} ${s.label}</button>`).join('')}</div>`;
 
 function renderToday() {
-  const n = DB.items.length;
-  const pool = poolFor(UI.season);
-  if (!UI.suggestions) UI.suggestions = suggest(3);
-  const sug = UI.suggestions;
+  ensureQueue();
   const moods = [[2, 'Leger'], [3, 'Normal'], [4, 'Schick']];
+  const c = UI.queue[0];
   return `<div class="card">
-    <h2>Guten Morgen</h2>
     <h3>Jahreszeit</h3>
     ${seasonChips(UI.season, 'App.setSeason')}
     <h3>Anlass</h3>
     <div class="chips">${moods.map(([v, l]) =>
       `<button class="chip ${UI.mood === v ? 'active' : ''}" onclick="App.setMood(${v})">${l}</button>`).join('')}</div>
-    <p class="small" style="margin:10px 0 0">${pool.length} von ${n} Teilen passen zur Jahreszeit.
-    Höchstens ${MAX_WORLDS} bunte Farbwelten pro Outfit.</p>
   </div>
-  ${sug.length ? sug.map((s, i) => outfitCardHTML(s, i)).join('')
-    : `<div class="card"><p class="hint">Aus den Teilen für ${esc(SEASONS.find(x => x.key === UI.season).label)}
-       lässt sich noch nichts bauen. Es braucht mindestens ein Oberteil, ein Unterteil und ein Paar Schuhe
-       in dieser Jahreszeit – oder ein Kleid und Schuhe.</p>
-       <button class="btn block" onclick="App.setTab('closet')">Zum Schrank</button></div>`}
-  ${sug.length ? `<button class="btn primary block" onclick="App.reroll()">Neu würfeln</button>` : ''}`;
+  ${c ? swipeHTML(c) : `<div class="card"><h2>Für heute durch</h2>
+      <p class="hint">Keine weiteren Kombinationen für ${esc(SEASONS.find(x => x.key === UI.season).label)}
+      und diesen Anlass. Morgen kommen die „Not today"-Vorschläge wieder – oder du änderst oben die Auswahl.</p>
+      ${(DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen (${DB.tossed.length})</button>` : ''}
+    </div>`}`;
 }
 
-function outfitCardHTML(s, i) {
-  const items = s.ids.map(itemById).filter(Boolean);
-  if (!items.length) return '';
+function swipeHTML(c) {
+  const items = c.ids.map(itemById).filter(Boolean);
   const worlds = outfitWorlds(items);
-  const names = items.map(it => esc(it.name || CATS[it.cat].label)).join(' · ');
-  return `<div class="card">
-    ${collageHTML(items)}
-    <p class="small" style="margin:10px 0 6px">${names}</p>
-    <div class="btn-row" style="justify-content:space-between">
+  return `<div class="swipe">
+    <div class="swipe-card" id="card">
+      <div class="stamp take">TAKE</div>
+      <div class="stamp toss">TOSS</div>
+      <div class="stamp skip">NOT TODAY</div>
+      ${collageHTML(items)}
+      <p class="small" style="margin:10px 0 6px">${items.map(it =>
+        esc(it.name || CATS[it.cat].label)).join(' · ')}</p>
       <span class="worldtags">${worlds.length
         ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
         : '<span class="wtag">nur Neutral</span>'}</span>
-      <span class="btn-row">
-        <button class="btn small" onclick="App.rerollOne(${i})" aria-label="Neu würfeln">🎲</button>
-        <button class="btn small" onclick="App.likeOutfit(${i})" aria-label="Merken">👍</button>
-      </span>
     </div>
-  </div>`;
+  </div>
+  <div class="swipe-actions">
+    <button class="act toss" onclick="App.decide('toss')" aria-label="Toss">✕<span>Toss</span></button>
+    <button class="act skip" onclick="App.decide('skip')" aria-label="Not today">↷<span>Not today</span></button>
+    <button class="act take" onclick="App.decide('take')" aria-label="Take">♥<span>Take</span></button>
+  </div>
+  <p class="small center">Nach rechts wischen für Take, nach links für Toss.</p>`;
 }
 
 /* --- Nachsortieren nach der Migration --- */
@@ -516,6 +539,50 @@ const SORT_OPTIONS = {
   acc: ['acc', 'bag']
 };
 function renderSorter() {
+  return UI.sorting === 'season' ? renderSeasonSorter() : renderCatSorter();
+}
+
+function renderSeasonSorter() {
+  const todo = DB.items.filter(i => i.seasonsAuto);
+  if (!todo.length) {
+    return `<div class="card center">
+      <h2>Fertig</h2>
+      <p class="hint">Alle Jahreszeiten sind bestätigt.</p>
+      <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button>
+    </div>`;
+  }
+  const it = todo[0];
+  const gewaehlt = currentSeasonDraft(it);
+  return `<div class="card">
+    <h2>Jahreszeiten <span class="small">noch ${todo.length}</span></h2>
+    <p class="hint" style="margin:0 0 10px">Bisher nur aus der Wärme geraten. Mehrfachauswahl –
+    bestätige oder korrigiere.</p>
+    <div class="checker"><img data-pic="${it.picId}" alt=""></div>
+    <p class="center small" style="margin:8px 0 4px">${esc(it.name || '(ohne Namen)')}
+      · ${esc(CATS[it.cat].label)} · ${esc(WARMTH_LBL[it.warmth || 3])}</p>
+    <div class="chips" style="justify-content:center">
+      ${SEASONS.map(s => `<button class="chip ${gewaehlt.includes(s.key) ? 'active' : ''}"
+        onclick="App.seasonToggle('${s.key}')">${s.ico} ${s.label}</button>`).join('')}
+    </div>
+    <button class="btn primary block" style="margin-top:10px" onclick="App.seasonConfirm()"
+      ${gewaehlt.length ? '' : 'disabled'}>Übernehmen und weiter</button>
+    ${gewaehlt.length ? '' : '<p class="small center">Mindestens eine Jahreszeit wählen.</p>'}
+    <div class="btn-row" style="margin-top:6px">
+      <button class="btn small" onclick="App.seasonSkip()">Später</button>
+      <button class="btn small" onclick="App.stopSort()">Abbrechen</button>
+    </div>
+  </div>`;
+}
+/* Entwurf je Teil, damit Antippen nicht sofort speichert */
+function currentSeasonDraft(it) {
+  if (UI.seasonDraftId !== it.id) {
+    UI.seasonDraftId = it.id;
+    UI.seasonDraft = [...(it.seasons || [])];
+  }
+  return UI.seasonDraft;
+}
+
+function renderCatSorter() {
   const todo = DB.items.filter(i => i.needsSort);
   if (!todo.length) {
     return `<div class="card center">
@@ -550,7 +617,14 @@ function renderCloset() {
     CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (b.addedAt || 0) - (a.addedAt || 0));
   const counts = c => DB.items.filter(i => i.cat === c).length;
   const todo = needsSortCount();
-  return `${todo ? `<div class="card accent">
+  const stodo = seasonTodoCount();
+  return `${stodo ? `<div class="card accent">
+    <h2>${stodo} ${stodo === 1 ? 'Teil braucht' : 'Teile brauchen'} bestätigte Jahreszeiten</h2>
+    <p class="hint" style="margin:0 0 10px">Die Jahreszeiten sind bisher nur aus der Wärme abgeleitet.
+    Einmal durchgehen und bestätigen oder korrigieren – geht meist mit einem Tipp pro Teil.</p>
+    <button class="btn primary block" onclick="App.startSort('season')">Jahreszeiten durchgehen</button>
+  </div>` : ''}
+  ${todo ? `<div class="card accent">
     <h2>${todo} ${todo === 1 ? 'Teil braucht' : 'Teile brauchen'} eine Unterkategorie</h2>
     <p class="hint" style="margin:0 0 10px">Aus der alten Version übernommen: Oberteile sind noch nicht in
     Tops, Strick und Blusen getrennt, Röcke stecken bei den Hosen, Taschen bei den Accessoires.</p>
@@ -809,6 +883,43 @@ function renderPicker() {
   </div></div>`;
 }
 
+/* Wischen: nur waagerecht, damit die Seite senkrecht scrollbar bleibt */
+function attachSwipe() {
+  const card = $('#card');
+  if (!card) return;
+  const SCHWELLE = 85;
+  let sx = 0, sy = 0, dx = 0, dy = 0, zieht = false;
+  const stamps = k => card.querySelector('.stamp.' + k);
+  const zeige = () => {
+    stamps('take').style.opacity = dx > 15 ? Math.min(1, (dx - 15) / 70) : 0;
+    stamps('toss').style.opacity = dx < -15 ? Math.min(1, (-dx - 15) / 70) : 0;
+  };
+  card.addEventListener('pointerdown', e => {
+    zieht = true; sx = e.clientX; sy = e.clientY; dx = dy = 0;
+    card.setPointerCapture(e.pointerId);
+    card.style.transition = 'none';
+  });
+  card.addEventListener('pointermove', e => {
+    if (!zieht) return;
+    dx = e.clientX - sx; dy = e.clientY - sy;
+    if (Math.abs(dy) > Math.abs(dx) * 1.5 && Math.abs(dx) < 20) return;  /* senkrecht scrollen lassen */
+    card.style.transform = `translate(${dx}px, ${dy * 0.25}px) rotate(${dx / 24}deg)`;
+    zeige();
+  });
+  const ende = () => {
+    if (!zieht) return;
+    zieht = false;
+    card.style.transition = 'transform .25s ease, opacity .25s ease';
+    if (Math.abs(dx) > SCHWELLE) App.decide(dx > 0 ? 'take' : 'toss');
+    else {
+      card.style.transform = '';
+      card.querySelectorAll('.stamp').forEach(s => s.style.opacity = 0);
+    }
+  };
+  card.addEventListener('pointerup', ende);
+  card.addEventListener('pointercancel', ende);
+}
+
 /* ================= Aktionen ================= */
 const App = {};
 window.App = App;
@@ -823,27 +934,47 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.remove(), 2600);
 }
 
-App.setTab = tab => { UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; render(); };
+App.setTab = tab => { UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; UI.queue = null;
+UI.seasonDraft = null; UI.seasonDraftId = null; render(); };
 App.filterCloset = c => { UI.closetFilter = c; render(); };
-App.setSeason = s => { UI.season = s; UI.suggestions = null; render(); };
-App.setMood = v => { UI.mood = v; UI.suggestions = null; render(); };
-App.reroll = () => { UI.suggestions = suggest(3); render(); };
-App.rerollOne = i => {
-  const fresh = suggest(6).filter(c =>
-    !UI.suggestions.some((o, j) => j !== i && o.ids.join() === c.ids.join()));
-  if (fresh.length) UI.suggestions[i] = pick(fresh);
-  render();
-};
-App.likeOutfit = i => {
-  const s = UI.suggestions[i];
-  if (!s) return;
-  if (DB.outfits.some(o => outfitKey(o.ids) === outfitKey(s.ids))) {
-    toast('Hast du schon gemerkt');
-    return;
+App.setSeason = s => { UI.season = s; UI.queue = null; render(); };
+App.setMood = v => { UI.mood = v; UI.queue = null; render(); };
+
+/* Take / Toss / Not today */
+App.decide = what => {
+  const c = UI.queue && UI.queue[0];
+  if (!c) return;
+  const key = outfitKey(c.ids);
+  if (what === 'take') {
+    if (!DB.outfits.some(o => outfitKey(o.ids) === key)) {
+      DB.outfits.push({ id: uid(), date: todayISO(), ids: [...c.ids], liked: true });
+    }
+    toast('Gemerkt – liegt unter Outfits');
+  } else if (what === 'toss') {
+    DB.tossed = DB.tossed || [];
+    if (!DB.tossed.includes(key)) DB.tossed.push(key);
+  } else {
+    DB.snoozed = DB.snoozed || {};
+    DB.snoozed[key] = todayISO();       /* morgen wieder im Spiel */
   }
-  DB.outfits.push({ id: uid(), date: todayISO(), ids: [...s.ids], liked: true });
   save();
-  toast('Outfit gemerkt');
+  UI.queue.shift();
+  const card = $('#card');
+  if (!card) return render();
+  const x = what === 'take' ? 520 : what === 'toss' ? -520 : 0;
+  const y = what === 'skip' ? 420 : 0;
+  card.style.transition = 'transform .25s ease, opacity .25s ease';
+  card.style.transform = `translate(${x}px, ${y}px) rotate(${x / 24}deg)`;
+  card.style.opacity = '0';
+  if (what === 'skip') card.querySelector('.stamp.skip').style.opacity = 1;
+  setTimeout(render, 230);
+};
+App.resetTossed = () => {
+  if (!confirm('Alle verworfenen Kombinationen wieder zulassen?')) return;
+  DB.tossed = [];
+  save();
+  UI.queue = null;
+  render();
 };
 
 /* --- Gemerkte Outfits und eigener Baukasten --- */
@@ -854,7 +985,8 @@ App.editOutfit = id => {
   UI.builder = { ids: o.ids.filter(itemById), name: o.name || '', editId: o.id };
   render();
 };
-App.closeBuilder = () => { UI.builder = null; UI.picker = null; UI.modal = null; render(); };
+App.closeBuilder = () => { UI.builder = null; UI.picker = null; UI.queue = null;
+UI.seasonDraft = null; UI.seasonDraftId = null; UI.modal = null; render(); };
 /* Kein render(): sonst verliert das Textfeld beim Tippen den Fokus */
 App.builderName = v => { if (UI.builder) UI.builder.name = v; };
 App.pickSlot = key => { UI.picker = key; UI.modal = 'pick'; render(); };
@@ -912,15 +1044,42 @@ App.delOutfit = id => {
 };
 
 /* --- Nachsortieren --- */
-App.startSort = () => { UI.sorting = true; render(); };
-App.stopSort = () => { UI.sorting = false; render(); };
+App.startSort = mode => {
+  UI.sorting = mode || 'cat';
+  UI.seasonDraft = null; UI.seasonDraftId = null;
+  render();
+};
+App.stopSort = () => { UI.sorting = false; UI.seasonDraftId = null; render(); };
+App.seasonToggle = key => {
+  if (!UI.seasonDraft) return;
+  UI.seasonDraft = UI.seasonDraft.includes(key)
+    ? UI.seasonDraft.filter(s => s !== key) : UI.seasonDraft.concat([key]);
+  render();
+};
+App.seasonConfirm = () => {
+  const it = itemById(UI.seasonDraftId);
+  if (!it || !UI.seasonDraft || !UI.seasonDraft.length) return;
+  it.seasons = [...UI.seasonDraft];
+  delete it.seasonsAuto;
+  save();
+  UI.seasonDraftId = null; UI.seasonDraft = null; UI.queue = null;
+  render();
+};
+App.seasonSkip = () => {
+  const it = itemById(UI.seasonDraftId);
+  if (!it) return;
+  DB.items = DB.items.filter(x => x.id !== it.id).concat([it]);
+  save();
+  UI.seasonDraftId = null; UI.seasonDraft = null;
+  render();
+};
 App.sortInto = (id, cat) => {
   const it = itemById(id);
   if (!it) return;
   it.cat = cat;
   delete it.needsSort;
   save();
-  UI.suggestions = null;
+  UI.queue = null;
   render();
 };
 App.sortSkip = id => {
@@ -995,6 +1154,7 @@ App.draftSet = (key, val, quiet) => {
   if (key === 'cat' && d.cat !== val) {
     d.warmth = CATS[val].warmth;
     d.seasons = seasonsFromWarmth(d.warmth);
+    d.seasonsAuto = true;        /* neu abgeleitet, also wieder ungeprüft */
     delete d.needsSort;
   }
   d[key] = val;
@@ -1003,6 +1163,7 @@ App.draftSet = (key, val, quiet) => {
 App.draftSeason = key => {
   const d = UI.draft;
   if (!d) return;
+  delete d.seasonsAuto;          /* vom User gesetzt, nicht mehr geraten */
   d.seasons = d.seasons || [];
   d.seasons = d.seasons.includes(key) ? d.seasons.filter(s => s !== key) : d.seasons.concat([key]);
   render();
@@ -1023,7 +1184,7 @@ App.saveItem = () => {
   const ex = DB.items.findIndex(i => i.id === d.id);
   if (ex >= 0) DB.items[ex] = d; else DB.items.push(d);
   save();
-  UI.modal = null; UI.draft = null; UI.suggestions = null;
+  UI.modal = null; UI.draft = null; UI.queue = null;
   toast('Gespeichert');
   render();
 };
@@ -1038,7 +1199,7 @@ App.deleteItem = async () => {
   if (!d || !confirm('Dieses Teil wirklich löschen?')) return;
   DB.items = DB.items.filter(i => i.id !== d.id);
   save();
-  UI.modal = null; UI.draft = null; UI.suggestions = null;
+  UI.modal = null; UI.draft = null; UI.queue = null;
   dropPicURL(d.picId); await picDel(d.picId);
   render();
 };
@@ -1070,7 +1231,7 @@ async function addTrendFrom(blob) {
     await picPut(picId, await canvasToBlob(cv, 'image/jpeg', 0.8));
     DB.trends.push({ id: uid(), picId, colors, addedAt: Date.now() });
     save();
-    UI.suggestions = null;
+    UI.queue = null;
     document.querySelector('.toast')?.remove();
     toast('Pin übernommen');
     render();
@@ -1085,7 +1246,7 @@ App.delTrend = async id => {
   DB.trends = DB.trends.filter(x => x.id !== id);
   save();
   dropPicURL(t.picId); await picDel(t.picId);
-  UI.suggestions = null;
+  UI.queue = null;
   render();
 };
 
@@ -1135,7 +1296,7 @@ App.importChosen = async input => {
       if (!(await picGet(id).catch(() => null))) await picPut(id, dataURLtoBlob(du));
     }
     save();
-    UI.suggestions = null;
+    UI.queue = null;
     toast(`${added} ${added === 1 ? 'Teil' : 'Teile'} übernommen`);
     render();
   } catch (e) {
@@ -1182,9 +1343,9 @@ App.wipe = async () => {
   if (!confirm('Wirklich alle Teile, Pins und Outfits löschen?')) return;
   if (!confirm('Das lässt sich nicht rückgängig machen. Sicher?')) return;
   for (const id of allPicIds()) { dropPicURL(id); await picDel(id); }
-  DB = { version: DB_VERSION, items: [], trends: [], outfits: [], prefs: {} };
+  DB = { version: DB_VERSION, items: [], trends: [], outfits: [], tossed: [], snoozed: {}, prefs: {} };
   save();
-  UI.suggestions = null; UI.sorting = false;
+  UI.queue = null; UI.sorting = false;
   render();
 };
 
