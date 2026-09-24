@@ -203,3 +203,44 @@ label.fld > *{margin-top:4px; font-weight:400;}
 .act.skip{color:var(--orange);}
 .act.take{color:var(--green);}
 .act:active{transform:scale(.93);}
+
+/* ---------- Sammlung: Raster, Sticker, Flagge ---------- */
+.ogrid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;}
+.ocell{
+  background:var(--card); border-radius:var(--radius); padding:6px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
+}
+.ocell:active{opacity:.75;}
+.collage.klein{border-radius:10px;}
+.ocap{
+  font-size:11.5px; color:var(--muted); margin-top:4px; padding:0 3px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.osticker{
+  position:absolute; top:6px; right:6px; z-index:20;
+  background:rgba(255,255,255,.93); color:#3a322c;
+  border-radius:999px; padding:2px 8px; font-size:12px; font-weight:600;
+  box-shadow:0 1px 2px rgba(0,0,0,.2);
+}
+.collage.klein .osticker{top:4px; right:4px; padding:1px 5px; font-size:11px;}
+
+/* Rote Ecke: Teil steckt in keiner gemerkten Kombination */
+.tile .flag{
+  position:absolute; left:0; top:0; z-index:2;
+  width:0; height:0;
+  border-left:14px solid var(--red); border-bottom:14px solid transparent;
+  border-top-left-radius:11px;
+}
+
+/* ---------- Fixieren im Baukasten ---------- */
+.slot-item.fixiert{border-color:var(--accent); background:var(--accent-soft);}
+.slot-item .mini{
+  flex:0 0 auto; width:34px; height:34px; border-radius:9px;
+  border:1px solid var(--line); background:var(--card);
+  font-family:inherit; font-size:14px; line-height:1;
+}
+.slot-item .mini.on{background:var(--accent); border-color:var(--accent);}
+.card.kompakt{padding:10px 12px;}
+.chips.tight{gap:5px; margin:0;}
+.chip.mini{padding:5px 10px; font-size:13px;}
+.trenner{width:1px; align-self:stretch; background:var(--line); margin:2px 3px;}

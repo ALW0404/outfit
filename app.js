@@ -38,6 +38,16 @@ const SLOTS = [
   { key: 'bag',         label: 'Tasche',     cats: ['bag'] },
   { key: 'acc',         label: 'Accessoire', cats: ['acc'], max: 2 }
 ];
+/* Kategorien auf Outfit-Ebene, Reihenfolge = Sortierreihenfolge */
+const OUTFIT_TAGS = [
+  { key: 'sommer',    label: 'Sommer',            ico: '☀️' },
+  { key: 'uebergang', label: 'Frühjahr & Herbst', ico: '🍃' },
+  { key: 'winter',    label: 'Winter',            ico: '❄️' },
+  { key: 'special',   label: 'Special Occasion',  ico: '✨' }
+];
+const tagInfo = k => OUTFIT_TAGS.find(t => t.key === k) || OUTFIT_TAGS[1];
+const TAG_ORDER = { sommer: 1, uebergang: 2, winter: 3, special: 4 };
+
 const fmtDate = iso => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}.${m}.${y}` : ''; };
 
 const WARMTH_LBL = ['', 'sehr leicht', 'leicht', 'mittel', 'warm', 'sehr warm'];
@@ -54,9 +64,11 @@ const seasonNow = () => ['winter','winter','fruehjahr','fruehjahr','fruehjahr','
 /* Zielwärme je Jahreszeit, gegen die Teile bewertet werden */
 const SEASON_WARMTH = { fruehjahr: 2.6, sommer: 1.5, herbst: 3.4, winter: 4.4 };
 /* Vorgabe beim Erfassen: aus der Wärme abgeleitet, vom User überschreibbar */
+/* Wärme 3 schließt den Winter mit ein: eine Jeans ist Wärme 3 und trotzdem ein Winterteil.
+   Ohne das bleibt der Winter-Pool ohne Unterteile und es entsteht kein einziger Vorschlag. */
 const seasonsFromWarmth = w => w <= 1 ? ['sommer']
   : w === 2 ? ['fruehjahr', 'sommer', 'herbst']
-  : w === 3 ? ['fruehjahr', 'herbst']
+  : w === 3 ? ['fruehjahr', 'herbst', 'winter']
   : w === 4 ? ['herbst', 'winter'] : ['winter'];
 
 /* ================= Farbwelten ================= */
@@ -106,13 +118,25 @@ const MAX_WORLDS = 3;
 /* Stabiler Schlüssel, um dieselbe Kombination nicht doppelt zu merken */
 const outfitKey = ids => [...ids].sort().join('|');
 /* Ein Outfit passt nur in die Jahreszeiten, die alle seine Teile mittragen */
+/* Vorschlag für die Outfit-Kategorie aus den Teilen */
+function autoTag(items) {
+  if (!items.length) return 'uebergang';
+  if (avg(items.map(i => i.formality || 3)) >= 4) return 'special';
+  const s = outfitSeasons(items);
+  const sommer = s.includes('sommer'), winter = s.includes('winter');
+  if (sommer && !winter) return 'sommer';
+  if (winter && !sommer) return 'winter';
+  return 'uebergang';
+}
+const outfitTag = o => o.tag || autoTag(o.ids.map(itemById).filter(Boolean));
+
 const outfitSeasons = items => !items.length ? []
   : SEASONS.map(s => s.key).filter(k => items.every(it => (it.seasons || []).includes(k)));
 
 /* ================= Datenbank (localStorage) ================= */
 const LS_KEY = 'outfit-v1';
 const LS_UI = 'outfit-ui';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 /* v1 kannte nur top/bottom/acc – die feineren Kategorien muss der User nachsortieren. */
 const CAT_MIGRATION = { top: 'top', bottom: 'pants', acc: 'acc', dress: 'dress', outer: 'outer', shoes: 'shoes' };
@@ -138,6 +162,14 @@ function migrate(d) {
     d.tossed = d.tossed || [];
     d.snoozed = d.snoozed || {};
     d.version = 3;
+  }
+  if (d.version === 3) {
+    /* Ableitung hat sich geändert (Wärme 3 zählt jetzt auch zum Winter).
+       Nur ungeprüfte Teile neu ableiten – bestätigte bleiben unangetastet. */
+    (d.items || []).forEach(it => {
+      if (it.seasonsAuto) it.seasons = seasonsFromWarmth(it.warmth || 3);
+    });
+    d.version = 4;
   }
   return d;
 }
@@ -165,17 +197,25 @@ function save() {
   catch (e) { toast('Speicher voll – bitte in Daten aufräumen'); console.error(e); }
 }
 
-let UI = { tab: 'today', closetFilter: 'all', season: seasonNow(), mood: 3 };
+let UI = { tab: 'today', closetFilter: 'all', season: seasonNow(), mood: 3,
+  outSort: 'neu', outFilter: null, outTagFilter: 'all' };
 try { Object.assign(UI, JSON.parse(localStorage.getItem(LS_UI) || '{}')); } catch (e) {}
 UI.modal = null; UI.draft = null; UI.sorting = false;
-UI.builder = null; UI.picker = null; UI.queue = null;
+UI.builder = null; UI.picker = null; UI.queue = null; UI.detail = null;
 UI.seasonDraft = null; UI.seasonDraftId = null;
 function saveUI() {
   localStorage.setItem(LS_UI, JSON.stringify({ tab: UI.tab, closetFilter: UI.closetFilter,
-    season: UI.season, mood: UI.mood }));
+    season: UI.season, mood: UI.mood, outSort: UI.outSort, outTagFilter: UI.outTagFilter }));
 }
 const itemById = id => DB.items.find(i => i.id === id);
 const needsSortCount = () => DB.items.filter(i => i.needsSort).length;
+/* Teile, die in noch keiner gemerkten Kombination vorkommen – pro Render einmal berechnet */
+let _usedIds = null;
+const istUngenutzt = id => {
+  if (!_usedIds) _usedIds = new Set((DB.outfits || []).flatMap(o => o.ids));
+  return !_usedIds.has(id);
+};
+
 const seasonTodoCount = () => DB.items.filter(i => i.seasonsAuto).length;
 
 /* Kombinationen, die nicht mehr vorgeschlagen werden sollen */
@@ -393,83 +433,163 @@ function collageHTML(items, opt = {}) {
   const pieces = collageLayout(items).map(p =>
     `<div class="cpiece" style="left:${pct(p.r.left)}; top:${pct(p.r.top)}; width:${pct(p.r.w)}; height:${pct(p.r.h)}; z-index:${p.r.z}">
        <img data-pic="${p.it.picId}" alt="${esc(p.it.name || CATS[p.it.cat].label)}"></div>`).join('');
-  return `<div class="collage"${opt.onclick ? ` onclick="${opt.onclick}"` : ''}>${pieces}</div>`;
+  const sticker = opt.tag
+    ? `<span class="osticker">${tagInfo(opt.tag).ico}${opt.tagLabel ? ' ' + esc(tagInfo(opt.tag).label) : ''}</span>`
+    : '';
+  return `<div class="collage${opt.klein ? ' klein' : ''}"${opt.onclick ? ` onclick="${opt.onclick}"` : ''}>${pieces}${sticker}</div>`;
 }
 
 /* ================= Vorschlagslogik ================= */
-const poolFor = season => DB.items.filter(it => !it.seasons || !it.seasons.length || it.seasons.includes(season));
+/* Jahreszeit ist eine harte Bedingung. Teile ohne gepflegte Angabe werden aus der
+   Wärme abgeleitet, damit sie nicht stillschweigend in jeder Jahreszeit auftauchen. */
+const itemSeasons = it => (it.seasons && it.seasons.length) ? it.seasons : seasonsFromWarmth(it.warmth || 3);
+const poolFor = season => DB.items.filter(it => itemSeasons(it).includes(season));
 const trendWorlds = () => new Set(DB.trends.flatMap(t => (t.colors || []).map(colorWorld))
   .filter(w => w !== 'neutral'));
-/* Wärme bestimmen Basis und Jacke – Tasche und Kette sind dafür irrelevant */
+/* Wärme: Schuhe zählen mit – sonst landen Sandalen unter dem Wollmantel */
+const WARM_ROLES = ['base_top', 'base_bottom', 'base_full', 'layer', 'shoes'];
 const warmthOf = items => {
-  const rel = items.filter(i => ['base_top','base_bottom','base_full','layer'].includes(CATS[i.cat].role));
+  const rel = items.filter(i => WARM_ROLES.includes(CATS[i.cat].role));
   return avg(rel.map(i => i.warmth || 3));
 };
 
-function drawOutfit(pool, opts) {
+const MAX_FORMAL_SPREAD = 2;
+const WARMTH_TOLERANZ = 1.6;
+/* Kein tragendes Teil darf grob aus der Jahreszeit fallen. Jacken dürfen wärmer sein,
+   das ist ihre Aufgabe – nur zu dünn dürfen sie nicht sein. */
+function warmthFits(items, season) {
+  const t = SEASON_WARMTH[season];
+  return items.every(it => {
+    const role = CATS[it.cat].role;
+    if (role === 'bag' || role === 'acc') return true;
+    const w = it.warmth || 3;
+    if (role === 'layer') return w >= t - 0.6;
+    return Math.abs(w - t) <= WARMTH_TOLERANZ;
+  });
+}
+const formalityFits = items => {
+  const f = items.map(i => i.formality || 3);
+  return Math.max(...f) - Math.min(...f) <= MAX_FORMAL_SPREAD;
+};
+
+/* locked: Teile, die gesetzt bleiben; der Rest wird darum herum gezogen. */
+function drawOutfit(pool, opts, locked) {
+  locked = locked || [];
   const byRole = {};
   pool.forEach(it => { const r = CATS[it.cat].role; (byRole[r] = byRole[r] || []).push(it); });
-  const tops = byRole.base_top || [], bottoms = byRole.base_bottom || [],
-        dresses = byRole.base_full || [], shoes = byRole.shoes || [],
-        layers = byRole.layer || [], bags = byRole.bag || [], accs = byRole.acc || [];
-  if (!shoes.length) return null;
-  const canPair = tops.length && bottoms.length;
-  const useDress = dresses.length && (!canPair || Math.random() < 0.22);
-  if (!useDress && !canPair) return null;
-  const base = useDress ? [pick(dresses)] : [pick(tops), pick(bottoms)];
-  const out = base.concat([pick(shoes)]);
-  const target = SEASON_WARMTH[opts.season];
-  if (layers.length && warmthOf(base) < target + 0.4 && (target >= 3 || Math.random() < 0.35)) {
-    out.push(pick(layers));
+  const frei = r => (byRole[r] || []).filter(it => !locked.some(l => l.id === it.id));
+  const hat = r => locked.some(it => CATS[it.cat].role === r);
+  const out = [...locked];
+
+  if (!hat('base_full') && !(hat('base_top') && hat('base_bottom'))) {
+    if (hat('base_top')) {
+      const b = frei('base_bottom'); if (!b.length) return null; out.push(pick(b));
+    } else if (hat('base_bottom')) {
+      const t = frei('base_top'); if (!t.length) return null; out.push(pick(t));
+    } else {
+      const tops = frei('base_top'), bottoms = frei('base_bottom'), dresses = frei('base_full');
+      const canPair = tops.length && bottoms.length;
+      const useDress = dresses.length && (!canPair || Math.random() < 0.22);
+      if (useDress) out.push(pick(dresses));
+      else if (canPair) { out.push(pick(tops), pick(bottoms)); }
+      else return null;
+    }
   }
-  if (bags.length && Math.random() < 0.7) out.push(pick(bags));
-  if (accs.length && Math.random() < 0.5) out.push(pick(accs));
+  if (!hat('shoes')) {
+    const s = frei('shoes'); if (!s.length) return null; out.push(pick(s));
+  }
+  const target = SEASON_WARMTH[opts.season];
+  if (!hat('layer')) {
+    const l = frei('layer');
+    const basis = out.filter(i => ['base_top', 'base_bottom', 'base_full'].includes(CATS[i.cat].role));
+    if (l.length && avg(basis.map(i => i.warmth || 3)) < target + 0.4 &&
+        (target >= 3 || Math.random() < 0.35)) out.push(pick(l));
+  }
+  if (!hat('bag')) { const g = frei('bag'); if (g.length && Math.random() < 0.7) out.push(pick(g)); }
+  if (!hat('acc')) { const c = frei('acc'); if (c.length && Math.random() < 0.5) out.push(pick(c)); }
   return out;
 }
-/* Harte Regel des Users: höchstens drei bunte Farbwelten je Outfit */
-const validOutfit = items => outfitWorlds(items).length <= MAX_WORLDS;
+
+/* Harte Regeln: Farbwelten, Stilbruch, Jahreszeit */
+function validOutfit(items, season) {
+  if (outfitWorlds(items).length > MAX_WORLDS) return false;
+  if (!formalityFits(items)) return false;
+  if (season && !warmthFits(items, season)) return false;
+  return true;
+}
 
 function scoreOutfit(items, opts) {
   const worlds = outfitWorlds(items);
   const f = items.map(i => i.formality || 3);
-  const tw = opts.trends;
-  const hit = worlds.filter(w => tw.has(w)).length;
+  const hit = worlds.filter(w => opts.trends.has(w)).length;
   let s = 100;
-  s -= worlds.length * 5;                                  /* ruhiger schlägt bunt */
-  s -= (Math.max(...f) - Math.min(...f)) * 9;              /* kein Stilbruch */
-  s -= Math.abs(avg(f) - opts.formality) * 7;              /* Anlass treffen */
-  s -= Math.abs(warmthOf(items) - SEASON_WARMTH[opts.season]) * 8;
-  s += hit * 9;                                            /* liegt im Trend */
+  s -= worlds.length * 5;
+  s -= (Math.max(...f) - Math.min(...f)) * 9;
+  s -= Math.abs(avg(f) - opts.formality) * 7;
+  s -= Math.abs(warmthOf(items) - SEASON_WARMTH[opts.season]) * 10;
+  /* Teile, die zur Jahreszeit exakt passen statt nur knapp zu bestehen */
+  const passgenau = items.filter(i => itemSeasons(i).includes(opts.season)).length / items.length;
+  s += passgenau * 6;
+  s += hit * 9;
   return s;
 }
 
-function suggest(n = 12) {
+/* Sagt, welche Rolle fehlt, damit der Leerzustand nicht "alles gesehen" behauptet */
+function poolLuecke(season) {
+  const pool = poolFor(season);
+  const hat = r => pool.some(i => CATS[i.cat].role === r);
+  if (!hat('shoes')) return 'Schuhe';
+  if (!hat('base_full') && !(hat('base_top') && hat('base_bottom'))) {
+    if (!hat('base_top')) return 'Oberteile';
+    if (!hat('base_bottom')) return 'Unterteile oder Kleider';
+  }
+  return null;
+}
+
+/* Verhindert, dass dasselbe Teil in fast jedem Vorschlag auftaucht */
+function diversify(cands, n, vorbelegt) {
+  const ABSTAND = 3;
+  const out = [];
+  const zuletzt = new Map();
+  (vorbelegt || []).forEach((c, i) => c.ids.forEach(id => zuletzt.set(id, i - (vorbelegt.length))));
+  for (const c of cands) {
+    if (out.length >= n) break;
+    if (c.ids.some(id => zuletzt.has(id) && out.length - zuletzt.get(id) < ABSTAND)) continue;
+    c.ids.forEach(id => zuletzt.set(id, out.length));
+    out.push(c);
+  }
+  for (const c of cands) { if (out.length >= n) break; if (!out.includes(c)) out.push(c); }
+  return out;
+}
+
+function suggest(n = 12, vorbelegt) {
   const pool = poolFor(UI.season);
   const opts = { season: UI.season, formality: UI.mood, trends: trendWorlds() };
   const blocked = blockedKeys();
   const cands = [], seen = new Set();
-  for (let i = 0; i < 1400 && cands.length < 60; i++) {
+  for (let i = 0; i < 2500 && cands.length < 90; i++) {
     const o = drawOutfit(pool, opts);
-    if (!o || !validOutfit(o)) continue;
+    if (!o || !validOutfit(o, UI.season)) continue;
     const key = outfitKey(o.map(x => x.id));
     if (seen.has(key) || blocked.has(key)) continue;
     seen.add(key);
-    cands.push({ ids: o.map(x => x.id), score: scoreOutfit(o, opts) });
+    /* kleiner Zufallsanteil: gute Qualität, aber nicht jeden Tag dieselbe Reihenfolge */
+    cands.push({ ids: o.map(x => x.id), score: scoreOutfit(o, opts) + Math.random() * 5 });
   }
   cands.sort((a, b) => b.score - a.score);
-  /* Aus den besten mischen: gute Qualität, aber nicht jeden Tag dieselbe Reihenfolge */
-  return shuffled(cands.slice(0, Math.max(n * 2, 20))).slice(0, n);
+  return diversify(cands, n, vorbelegt);
 }
 /* Nachfüllen, solange noch etwas Ungesehenes übrig ist */
 function ensureQueue() {
   if (!UI.queue) UI.queue = [];
   if (UI.queue.length >= 3) return;
   const da = new Set(UI.queue.map(q => outfitKey(q.ids)));
-  suggest(12).forEach(c => { if (!da.has(outfitKey(c.ids))) UI.queue.push(c); });
+  suggest(12, UI.queue).forEach(c => { if (!da.has(outfitKey(c.ids))) UI.queue.push(c); });
 }
 
 /* ================= Rendern ================= */
 function render() {
+  _usedIds = null;
   document.querySelectorAll('#tabbar button').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === UI.tab));
   const main = $('#main');
@@ -501,11 +621,17 @@ function renderToday() {
     <div class="chips">${moods.map(([v, l]) =>
       `<button class="chip ${UI.mood === v ? 'active' : ''}" onclick="App.setMood(${v})">${l}</button>`).join('')}</div>
   </div>
-  ${c ? swipeHTML(c) : `<div class="card"><h2>Für heute durch</h2>
-      <p class="hint">Keine weiteren Kombinationen für ${esc(SEASONS.find(x => x.key === UI.season).label)}
-      und diesen Anlass. Morgen kommen die „Not today"-Vorschläge wieder – oder du änderst oben die Auswahl.</p>
+  ${c ? swipeHTML(c) : (() => {
+      const luecke = poolLuecke(UI.season);
+      const saison = esc(SEASONS.find(x => x.key === UI.season).label);
+      return `<div class="card"><h2>${luecke ? 'Da fehlt etwas' : 'Für heute durch'}</h2>
+      <p class="hint">${luecke
+        ? `Für ${saison} sind keine <b>${esc(luecke)}</b> im Schrank. Ohne die lässt sich kein Outfit
+           bauen – prüfe im Schrank unter <i>Jahreszeiten durchgehen</i>, ob dort etwas zu eng gesetzt ist.`
+        : `Keine weiteren Kombinationen für ${saison} und diesen Anlass. Morgen kommen die
+           „Not today\"-Vorschläge wieder – oder du änderst oben die Auswahl.`}</p>
       ${(DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen (${DB.tossed.length})</button>` : ''}
-    </div>`}`;
+    </div>`; })()}`;
 }
 
 function swipeHTML(c) {
@@ -654,6 +780,7 @@ function tileHTML(it, onclick) {
   const action = typeof onclick === 'string' ? onclick : `App.editItem('${it.id}')`;
   return `<div class="tile" onclick="${action}">
     ${it.needsSort ? '<span class="dot" title="Unterkategorie fehlt"></span>' : ''}
+    ${istUngenutzt(it.id) ? '<span class="flag" title="In keiner gemerkten Kombination"></span>' : ''}
     <div class="thumbwrap"><img data-pic="${it.picId}" alt="${esc(it.name || '')}"></div>
     <div class="swatches">${(it.colors || []).map(c =>
       `<span class="sw" style="background:${esc(c)}"></span>`).join('')}</div>
@@ -662,48 +789,84 @@ function tileHTML(it, onclick) {
 }
 
 function renderOutfits() {
-  const list = [...DB.outfits].reverse();
-  return `<div class="card">
-    <h2>Deine Outfits</h2>
-    <p class="hint" style="margin:0 0 10px">Gemerkte Vorschläge aus <i>Heute</i> und Kombinationen,
-    die du selbst zusammenstellst.</p>
-    <button class="btn primary block" onclick="App.newOutfit()">Eigene Kombination bauen</button>
+  let list = [...DB.outfits];
+  if (UI.outTagFilter && UI.outTagFilter !== 'all') list = list.filter(o => outfitTag(o) === UI.outTagFilter);
+  if (UI.outFilter) list = list.filter(o => o.ids.includes(UI.outFilter));
+  list.sort(UI.outSort === 'saison'
+    ? (x, y) => (TAG_ORDER[outfitTag(x)] - TAG_ORDER[outfitTag(y)]) || (y.date || '').localeCompare(x.date || '')
+    : (x, y) => (y.date || '').localeCompare(x.date || ''));
+
+  const gefiltert = UI.outFilter ? itemById(UI.outFilter) : null;
+  const zaehl = k => DB.outfits.filter(o => outfitTag(o) === k).length;
+  return `<div class="card kompakt">
+    <div class="btn-row" style="justify-content:space-between; margin-bottom:8px">
+      <b>Deine Outfits <span class="small">${list.length}${list.length !== DB.outfits.length ? ' / ' + DB.outfits.length : ''}</span></b>
+      <button class="btn small primary" onclick="App.newOutfit()">+ Eigene</button>
+    </div>
+    ${DB.outfits.length ? `<div class="chips tight">
+      <button class="chip mini ${UI.outSort === 'neu' ? 'active' : ''}" onclick="App.setOutSort('neu')">Neueste</button>
+      <button class="chip mini ${UI.outSort === 'saison' ? 'active' : ''}" onclick="App.setOutSort('saison')">Saison</button>
+      <span class="trenner"></span>
+      <button class="chip mini ${UI.outTagFilter === 'all' ? 'active' : ''}" onclick="App.setOutTag('all')">Alle</button>
+      ${OUTFIT_TAGS.filter(t => zaehl(t.key)).map(t =>
+        `<button class="chip mini ${UI.outTagFilter === t.key ? 'active' : ''}"
+          onclick="App.setOutTag('${t.key}')" title="${esc(t.label)}">${t.ico} ${zaehl(t.key)}</button>`).join('')}
+      <span class="trenner"></span>
+      ${gefiltert
+        ? `<button class="chip mini active" onclick="App.clearOutFilter()">${esc((gefiltert.name || CATS[gefiltert.cat].label).slice(0, 14))} ✕</button>`
+        : '<button class="chip mini" onclick="App.pickOutFilter()">Teil filtern …</button>'}
+    </div>` : ''}
   </div>
-  ${list.length ? list.map(savedOutfitHTML).join('')
-    : `<div class="card"><p class="hint">Noch nichts gesammelt. Im Reiter <i>Heute</i> einen Vorschlag
-       mit 👍 merken – oder oben selbst eine Kombination bauen.</p></div>`}`;
+  ${list.length ? `<div class="ogrid">${list.map(o => {
+      const items = o.ids.map(itemById).filter(Boolean);
+      return `<div class="ocell" onclick="App.openOutfit('${o.id}')">
+        ${items.length ? collageHTML(items, { klein: true, tag: outfitTag(o) })
+          : '<div class="collage klein empty"><span>leer</span></div>'}
+        ${o.name ? `<div class="ocap">${esc(o.name)}</div>` : ''}
+      </div>`;
+    }).join('')}</div>`
+    : `<div class="card"><p class="hint">${DB.outfits.length
+        ? 'Kein Outfit passt zu diesem Filter.'
+        : 'Noch nichts gesammelt. Im Reiter <i>Heute</i> nach rechts wischen – oder oben selbst eine Kombination bauen.'}</p></div>`}`;
 }
 
-function savedOutfitHTML(o) {
+function renderDetail() {
+  const o = DB.outfits.find(x => x.id === UI.detail);
+  if (!o) return '';
   const items = o.ids.map(itemById).filter(Boolean);
   const fehlend = o.ids.length - items.length;
   const worlds = outfitWorlds(items);
-  const seasons = outfitSeasons(items);
-  return `<div class="card">
-    ${items.length ? collageHTML(items)
+  const tag = outfitTag(o);
+  return `<div class="overlay" onclick="App.closeOutfit()"><div class="sheet" onclick="event.stopPropagation()">
+    <div class="sheet-head">
+      <h2>${o.name ? esc(o.name) : 'Outfit'}</h2>
+      <button class="btn small" onclick="App.closeOutfit()">Schließen</button>
+    </div>
+    ${items.length ? collageHTML(items, { tag, tagLabel: true })
       : '<p class="hint">Alle Teile dieses Outfits wurden inzwischen gelöscht.</p>'}
-    ${o.name ? `<p style="margin:10px 0 0; font-weight:600">${esc(o.name)}</p>` : ''}
-    <p class="small" style="margin:8px 0 8px">${items.map(it =>
+    <p class="small" style="margin:10px 0 6px">${items.map(it =>
       esc(it.name || CATS[it.cat].label)).join(' · ') || '–'}</p>
     ${fehlend ? `<p class="warn">${fehlend} ${fehlend === 1 ? 'Teil ist' : 'Teile sind'} nicht mehr im Schrank.</p>` : ''}
-    <div class="btn-row" style="justify-content:space-between">
-      <span class="worldtags">
-        ${seasons.map(k => `<span class="wtag">${SEASONS.find(s => s.key === k).ico}</span>`).join('')}
-        ${worlds.length ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
-          : '<span class="wtag">nur Neutral</span>'}
-      </span>
-      <span class="btn-row">
-        <button class="btn small" onclick="App.editOutfit('${o.id}')">Bearbeiten</button>
-        <button class="btn small danger" onclick="App.delOutfit('${o.id}')">Löschen</button>
-      </span>
+    <span class="worldtags">${worlds.length
+      ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
+      : '<span class="wtag">nur Neutral</span>'}</span>
+    <h3>Kategorie</h3>
+    <div class="chips">
+      ${OUTFIT_TAGS.map(t => `<button class="chip ${tag === t.key ? 'active' : ''}"
+        onclick="App.setOutfitTag('${o.id}','${t.key}')">${t.ico} ${esc(t.label)}</button>`).join('')}
     </div>
-    <p class="small" style="margin:8px 0 0">${o.own ? 'Selbst gebaut' : 'Gemerkt'} · ${fmtDate(o.date)}</p>
-  </div>`;
+    <p class="small">${o.own ? 'Selbst gebaut' : 'Gemerkt'} · ${fmtDate(o.date)}</p>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn" onclick="App.editOutfit('${o.id}')">Bearbeiten</button>
+      <button class="btn danger" onclick="App.delOutfit('${o.id}')">Löschen</button>
+    </div>
+  </div></div>`;
 }
 
 /* --- Baukasten für eigene Kombinationen --- */
-function slotRowHTML(slot, ids) {
-  const gewaehlt = ids.map(itemById).filter(it => it && slot.cats.includes(it.cat));
+function slotRowHTML(slot, b) {
+  const locked = b.locked || [];
+  const gewaehlt = b.ids.map(itemById).filter(it => it && slot.cats.includes(it.cat));
   const max = slot.max || 1;
   const label = !gewaehlt.length ? 'wählen' : gewaehlt.length < max ? '+ weiteres' : 'ändern';
   return `<div class="slot">
@@ -711,14 +874,31 @@ function slotRowHTML(slot, ids) {
       <span class="slot-label">${esc(slot.label)}</span>
       <button class="btn small" onclick="App.pickSlot('${slot.key}')">${label}</button>
     </div>
-    ${gewaehlt.map(it => `<div class="slot-item" onclick="App.unpick('${it.id}')">
-      <img data-pic="${it.picId}" alt=""><span>${esc(it.name || CATS[it.cat].label)}</span>
-      <span class="x">✕</span></div>`).join('')}
+    ${gewaehlt.map(it => {
+      const fix = locked.includes(it.id);
+      return `<div class="slot-item${fix ? ' fixiert' : ''}">
+        <img data-pic="${it.picId}" alt=""><span>${esc(it.name || CATS[it.cat].label)}</span>
+        <button class="mini ${fix ? 'on' : ''}" onclick="App.toggleLock('${it.id}')"
+          aria-label="${fix ? 'Fixierung lösen' : 'Fixieren'}">${fix ? '🔒' : '🔓'}</button>
+        <button class="mini" onclick="App.unpick('${it.id}')" aria-label="Entfernen">✕</button>
+      </div>`;
+    }).join('')}
   </div>`;
+}
+
+/* Fixierte Teile geben die Jahreszeit vor: wer Shorts fixiert, will kein Winteroutfit. */
+function builderSeason() {
+  const b = UI.builder;
+  const locked = ((b && b.locked) || []).map(itemById).filter(Boolean);
+  if (!locked.length) return UI.season;
+  const gemeinsam = SEASONS.map(s => s.key).filter(k => locked.every(it => itemSeasons(it).includes(k)));
+  if (!gemeinsam.length) return UI.season;
+  return gemeinsam.includes(UI.season) ? UI.season : gemeinsam[0];
 }
 
 function renderBuilder() {
   const b = UI.builder;
+  b.locked = b.locked || [];
   const items = b.ids.map(itemById).filter(Boolean);
   const worlds = outfitWorlds(items);
   const seasons = outfitSeasons(items);
@@ -730,7 +910,16 @@ function renderBuilder() {
     </div>
     ${items.length ? collageHTML(items)
       : '<div class="collage empty"><span>Wähle unten die Teile aus</span></div>'}
-    <div class="slots">${SLOTS.map(s => slotRowHTML(s, b.ids)).join('')}</div>
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn" onclick="App.rollRest()">🎲 Rest würfeln</button>
+      <span class="small">${b.locked && b.locked.length
+        ? b.locked.length + (b.locked.length === 1 ? ' Teil bleibt fix' : ' Teile bleiben fix')
+        : 'Mit 🔓 ein Teil fixieren, dann würfeln'}</span>
+    </div>
+    <p class="small" style="margin:6px 0 0">Gewürfelt wird für
+      <b>${esc(SEASONS.find(s => s.key === builderSeason()).label)}</b>${builderSeason() !== UI.season
+        ? ' – aus den fixierten Teilen abgeleitet' : ' (oben unter <i>Heute</i> umstellbar)'}.</p>
+    <div class="slots">${SLOTS.map(s => slotRowHTML(s, b)).join('')}</div>
     <label class="fld" style="margin-top:14px">Name (optional)
       <input type="text" value="${esc(b.name || '')}" placeholder="z. B. Bürotag im Herbst"
         oninput="App.builderName(this.value)">
@@ -814,7 +1003,9 @@ function renderData() {
 
 /* ================= Modal ================= */
 function renderModal() {
+  if (UI.detail) return renderDetail();
   if (UI.modal === 'pick') return renderPicker();
+  if (UI.modal === 'itempick') return renderItemPicker();
   if (UI.modal !== 'item' || !UI.draft) return '';
   const d = UI.draft;
   const isNew = !itemById(d.id);
@@ -866,6 +1057,20 @@ function renderModal() {
       : '<span class="wtag">Neutral</span>'}</span>
     <button class="btn primary block" style="margin-top:14px" onclick="App.saveItem()">Speichern</button>
     ${isNew ? '' : '<button class="btn danger block" onclick="App.deleteItem()">Teil löschen</button>'}
+  </div></div>`;
+}
+
+function renderItemPicker() {
+  const list = [...DB.items].sort((a, b) =>
+    CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (a.name || '').localeCompare(b.name || ''));
+  return `<div class="overlay" onclick="App.closeItemPick()"><div class="sheet" onclick="event.stopPropagation()">
+    <div class="sheet-head">
+      <h2>Nach welchem Teil filtern?</h2>
+      <button class="btn small" onclick="App.closeItemPick()">Abbrechen</button>
+    </div>
+    ${list.length ? `<div class="grid">${list.map(it =>
+        tileHTML(it, `App.chooseOutFilter(&#39;${it.id}&#39;)`)).join('')}</div>`
+      : '<p class="hint">Der Schrank ist leer.</p>'}
   </div></div>`;
 }
 
@@ -936,7 +1141,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.remove(), 2600);
 }
 
-App.setTab = tab => { UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; UI.queue = null;
+App.setTab = tab => { UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; UI.queue = null; UI.detail = null;
 UI.seasonDraft = null; UI.seasonDraftId = null; render(); };
 App.filterCloset = c => { UI.closetFilter = c; render(); };
 App.setSeason = s => { UI.season = s; UI.queue = null; render(); };
@@ -949,7 +1154,8 @@ App.decide = what => {
   const key = outfitKey(c.ids);
   if (what === 'take') {
     if (!DB.outfits.some(o => outfitKey(o.ids) === key)) {
-      DB.outfits.push({ id: uid(), date: todayISO(), ids: [...c.ids], liked: true });
+      DB.outfits.push({ id: uid(), date: todayISO(), ids: [...c.ids], liked: true,
+        tag: autoTag(c.ids.map(itemById).filter(Boolean)) });
     }
     toast('Gemerkt – liegt unter Outfits');
   } else if (what === 'toss') {
@@ -979,15 +1185,33 @@ App.resetTossed = () => {
   render();
 };
 
+/* --- Sammlung: Sortieren, Filtern, Detail --- */
+App.setOutSort = v => { UI.outSort = v; render(); };
+App.setOutTag = v => { UI.outTagFilter = v; render(); };
+App.pickOutFilter = () => { UI.modal = 'itempick'; render(); };
+App.closeItemPick = () => { UI.modal = null; render(); };
+App.chooseOutFilter = id => { UI.outFilter = id; UI.modal = null; render(); };
+App.clearOutFilter = () => { UI.outFilter = null; render(); };
+App.openOutfit = id => { UI.detail = id; render(); };
+App.closeOutfit = () => { UI.detail = null; render(); };
+App.setOutfitTag = (id, tag) => {
+  const o = DB.outfits.find(x => x.id === id);
+  if (!o) return;
+  o.tag = tag;
+  save();
+  render();
+};
+
 /* --- Gemerkte Outfits und eigener Baukasten --- */
-App.newOutfit = () => { UI.builder = { ids: [], name: '', editId: null }; render(); };
+App.newOutfit = () => { UI.builder = { ids: [], name: '', editId: null, locked: [] }; UI.detail = null; render(); };
 App.editOutfit = id => {
   const o = DB.outfits.find(x => x.id === id);
   if (!o) return;
-  UI.builder = { ids: o.ids.filter(itemById), name: o.name || '', editId: o.id };
+  UI.builder = { ids: o.ids.filter(itemById), name: o.name || '', editId: o.id, locked: [] };
+  UI.detail = null;
   render();
 };
-App.closeBuilder = () => { UI.builder = null; UI.picker = null; UI.queue = null;
+App.closeBuilder = () => { UI.builder = null; UI.picker = null; UI.queue = null; UI.detail = null;
 UI.seasonDraft = null; UI.seasonDraftId = null; UI.modal = null; render(); };
 /* Kein render(): sonst verliert das Textfeld beim Tippen den Fokus */
 App.builderName = v => { if (UI.builder) UI.builder.name = v; };
@@ -1012,9 +1236,52 @@ App.choosePick = id => {
   UI.picker = null; UI.modal = null;
   render();
 };
+App.toggleLock = id => {
+  const b = UI.builder;
+  if (!b) return;
+  b.locked = b.locked || [];
+  b.locked = b.locked.includes(id) ? b.locked.filter(x => x !== id) : b.locked.concat([id]);
+  render();
+};
+/* Würfelt alle nicht fixierten Plätze neu. Fixierte Teile bleiben stehen,
+   auch wenn sie streng genommen nicht zur Jahreszeit passen – das ist ja der Zweck. */
+App.rollRest = () => {
+  const b = UI.builder;
+  if (!b) return;
+  const locked = (b.locked || []).map(itemById).filter(Boolean);
+  const season = builderSeason();
+  const pool = poolFor(season);
+  const opts = { season, formality: UI.mood, trends: trendWorlds() };
+  /* Nicht immer das Optimum nehmen, sonst würfelt es viermal dasselbe.
+     Aus den besten fünf wird zufällig gezogen. */
+  const treffer = [];
+  const gesehen = new Set();
+  for (let i = 0; i < 600; i++) {
+    const o = drawOutfit(pool, opts, locked);
+    if (!o || !validOutfit(o, season)) continue;
+    const key = outfitKey(o.map(x => x.id));
+    if (gesehen.has(key) || key === outfitKey(b.ids)) continue;
+    gesehen.add(key);
+    treffer.push({ o, s: scoreOutfit(o, opts) });
+  }
+  treffer.sort((x, y) => y.s - x.s);
+  let best = treffer.length ? pick(treffer.slice(0, 5)).o : null;
+  if (!best) {
+    /* Fixierung zu eng: Jahreszeit- und Stilregel fallen lassen, Farbregel bleibt */
+    for (let i = 0; i < 500 && !best; i++) {
+      const o = drawOutfit(pool, opts, locked);
+      if (o && outfitWorlds(o).length <= MAX_WORLDS) best = o;
+    }
+    if (best) toast('Nur mit gelockerten Regeln möglich');
+  }
+  if (!best) { toast('Dazu passt nichts – Fixierung lösen'); return; }
+  b.ids = best.map(x => x.id);
+  render();
+};
 App.unpick = id => {
   if (!UI.builder) return;
   UI.builder.ids = UI.builder.ids.filter(x => x !== id);
+  UI.builder.locked = (UI.builder.locked || []).filter(x => x !== id);
   render();
 };
 App.saveOutfit = () => {
@@ -1031,7 +1298,7 @@ App.saveOutfit = () => {
       return;
     }
     DB.outfits.push({ id: uid(), date: todayISO(), ids: [...b.ids],
-      name: b.name || '', own: true, liked: true });
+      name: b.name || '', own: true, liked: true, tag: autoTag(items) });
   }
   save();
   UI.builder = null; UI.tab = 'outfits';
@@ -1042,6 +1309,7 @@ App.delOutfit = id => {
   if (!confirm('Dieses Outfit aus der Liste entfernen?')) return;
   DB.outfits = DB.outfits.filter(o => o.id !== id);
   save();
+  UI.detail = null;
   render();
 };
 
