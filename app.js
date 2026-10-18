@@ -1168,9 +1168,18 @@ async function kiAnalyse(item) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ bild, kategorie: CATS[item.cat].label, name: item.name || '' })
   });
-  if (res.status === 429) throw new Error('Tageskontingent aufgebraucht');
-  if (!res.ok) throw new Error('Dienst antwortet mit ' + res.status);
-  return res.json();
+  return await antwortLesen(res);
+}
+
+/* Der Worker schickt den Grund im Feld "fehler" mit. Den einfach wegzuwerfen
+   und nur den Statuscode zu zeigen macht jede Fehlersuche unmöglich. */
+async function antwortLesen(res) {
+  if (res.ok) return res.json();
+  let grund = '';
+  try { grund = (await res.json()).fehler || ''; } catch {}
+  if (res.status === 429) throw new Error(grund || 'Tageskontingent aufgebraucht');
+  if (res.status === 403) throw new Error(grund || 'Adresse nicht freigegeben (ALLOW_ORIGIN)');
+  throw new Error(grund ? `${res.status}: ${grund}` : 'Dienst antwortet mit ' + res.status);
 }
 
 /* Übernimmt das Ergebnis. Wärme, Anlass und Jahreszeiten werden nur gesetzt,
@@ -1225,9 +1234,7 @@ async function kiStilprofil() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ bilder })
   });
-  if (res.status === 429) throw new Error('Tageskontingent aufgebraucht');
-  if (!res.ok) throw new Error('Dienst antwortet mit ' + res.status);
-  const p = await res.json();
+  const p = await antwortLesen(res);
   return {
     aesthetik: String(p.aesthetik || '').slice(0, 600),
     stil: (p.stil || []).filter(t => STILE.includes(t)),
@@ -2420,8 +2427,26 @@ App.testWorker = async () => {
     if (!res.ok) { kiStatus = 'Antwort ' + res.status; render(); return; }
     const zeilen = [`Erreichbar · Modell ${j.modell || '?'} · heute ${j.heute ?? 0} von ${j.limit ?? '?'}`];
     if (j.bereit === false) zeilen.push('Noch nicht einsatzbereit.');
+    const k = j.schluessel;
+    if (k && k.vorhanden) zeilen.push(`Schlüssel: ${k.laenge} Zeichen · Format ${k.format || '?'}${k.enthaeltLeerzeichen ? ' · enthält Leerzeichen' : ''}`);
     (j.offen || []).forEach(o => zeilen.push('• ' + o));
     if (j.bereit && !(j.offen || []).length) zeilen.push('Alles eingerichtet.');
+    /* Prüfen, ob das eingestellte Modell für diesen Schlüssel überhaupt existiert */
+    try {
+      const m = await (await fetch(basis + '/modelle')).json();
+      if (Array.isArray(m.nutzbar)) {
+        if (m.anmeldeweg) zeilen.push(`Anmeldung über ${m.anmeldeweg} erfolgreich.`);
+        if (!m.nutzbar.includes(m.eingestellt)) {
+          zeilen.push(`• Modell "${m.eingestellt}" gibt es für deinen Schlüssel nicht.`);
+          zeilen.push('  Verfügbar u. a.: ' + m.nutzbar.filter(n => /flash|pro/.test(n)).slice(0, 6).join(', '));
+        } else {
+          zeilen.push(`Modell "${m.eingestellt}" ist nutzbar.`);
+        }
+      } else if (m.fehler) {
+        zeilen.push('• ' + m.fehler);
+        (m.tipps || []).forEach(x => zeilen.push('   – ' + x));
+      }
+    } catch {}
     kiStatus = zeilen.join('\n');
   } catch (e) {
     kiStatus = 'Nicht erreichbar. Adresse prüfen, oder ALLOW_ORIGIN passt nicht zu dieser Seite.';
