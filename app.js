@@ -1182,6 +1182,31 @@ async function antwortLesen(res) {
   throw new Error(grund ? `${res.status}: ${grund}` : 'Dienst antwortet mit ' + res.status);
 }
 
+/* Mehrere Teile in einer Abfrage. Googles Tagesgrenze zählt Abfragen, nicht
+   Bilder – ein Fünferpäckchen verfünffacht damit den Durchsatz. */
+/* Zwölf ist der Kompromiss: die Ausgabe bleibt weit unter der Längengrenze,
+   das Modell verwechselt die Nummern noch nicht, und ein Abbruch kostet
+   höchstens zwölf Teile statt aller. 173 Teile brauchen so 15 Abfragen. */
+const KI_PAKET = 12;
+
+async function kiAnalyseMehrere(items) {
+  const basis = dienstUrl();
+  if (!basis) throw new Error('Kein KI-Dienst eingerichtet');
+  const teile = [];
+  for (const it of items) {
+    teile.push({ bild: await bildFuerAnalyse(it.picId), kategorie: CATS[it.cat].label, name: it.name || '' });
+  }
+  const res = await fetch(basis + '/analyse-mehrere', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teile })
+  });
+  if (res.status === 404) { const e = new Error('Sammelabfrage nicht unterstützt'); e.alt = true; throw e; }
+  const daten = await antwortLesen(res);
+  const liste = Array.isArray(daten.teile) ? daten.teile : [];
+  /* Über den Index zuordnen, nicht über die Reihenfolge – das Modell kann umsortieren */
+  return items.map((it, i) => ({ item: it, a: liste.find(x => x.index === i) || null }));
+}
+
 /* Übernimmt das Ergebnis. Wärme, Anlass und Jahreszeiten werden nur gesetzt,
    solange der User sie nicht selbst bestätigt hat – seine Arbeit hat Vorrang. */
 function kiUebernehmen(item, a) {
@@ -1710,7 +1735,8 @@ function renderData() {
     <p class="hint" style="margin:0 0 10px">${(() => {
       const offen = DB.items.filter(i => !istAnalysiert(i)).length;
       return offen ? `${offen} von ${DB.items.length} Teilen sind noch nicht analysiert.
-        Läuft, bis das Tageskontingent erreicht ist, und macht danach dort weiter.`
+        Je Abfrage werden ${KI_PAKET} Teile zusammen geschickt – das schont Googles Tageskontingent,
+        das Abfragen zählt und nicht Bilder. Bei Erschöpfung macht die App später dort weiter.`
         : 'Alle Teile sind analysiert.';
     })()}</p>
     <div class="btn-row">
@@ -2476,34 +2502,40 @@ App.analyseEins = async id => {
 const KI_PAUSE_MS = 6500;
 
 App.analyseAlle = async () => {
-  /* Meldung im Zustand halten: sonst wischt das nächste render() sie weg,
-     und der Grund fürs Stoppen wäre für den Nutzer unsichtbar. */
   const sag = t => { kiMeldung = t; const el = $('#ki-fortschritt'); if (el) el.textContent = t; };
   const offen = DB.items.filter(i => !istAnalysiert(i));
   if (!offen.length) return;
-  let fertig = 0;
+
+  let fertig = 0, sammeln = true;
   kiStapelLaeuft = true;
-  for (const it of offen) {
+
+  const pakete = [];
+  for (let i = 0; i < offen.length; i += KI_PAKET) pakete.push(offen.slice(i, i + KI_PAKET));
+
+  for (const paket of pakete) {
     if (!kiStapelLaeuft) { sag(`Angehalten nach ${fertig} Teilen.`); save(); UI.queue = null; render(); return; }
-    const rest = Math.round((offen.length - fertig) * KI_PAUSE_MS / 60000);
-    sag(`${fertig} von ${offen.length} · noch etwa ${rest} Min.`);
+    const restMin = Math.max(1, Math.round((offen.length - fertig) / KI_PAKET * KI_PAUSE_MS / 60000));
+    sag(`${fertig} von ${offen.length} · noch etwa ${restMin} Min.`);
     try {
-      kiUebernehmen(it, await kiAnalyse(it));
-      fertig++;
+      if (sammeln) {
+        for (const { item, a } of await kiAnalyseMehrere(paket)) if (a) { kiUebernehmen(item, a); fertig++; }
+      } else {
+        for (const it of paket) { kiUebernehmen(it, await kiAnalyse(it)); fertig++;
+          await new Promise(r => setTimeout(r, KI_PAUSE_MS)); }
+      }
       save();
     } catch (e) {
-      /* Minutengrenze: einmal abwarten und erneut versuchen */
-      if (/429|Kontingent|rate/i.test(e.message) && fertig > 0) {
-        sag(`Grenze erreicht, warte 60 s … (${fertig} von ${offen.length})`);
-        await new Promise(r => setTimeout(r, 60000));
-        try { kiUebernehmen(it, await kiAnalyse(it)); fertig++; save(); }
-        catch (e2) { save(); sag(`${fertig} analysiert, dann gestoppt: ${e2.message}`); kiStapelLaeuft = false; UI.queue = null; render(); return; }
-      } else {
-        save();
-        sag(`${fertig} analysiert, dann gestoppt: ${e.message}`);
-        kiStapelLaeuft = false; UI.queue = null; render();
-        return;
+      if (e.alt && sammeln) {     /* alter Worker: einzeln weitermachen */
+        sammeln = false;
+        sag('Worker kennt die Sammelabfrage nicht – mache einzeln weiter.');
+        continue;
       }
+      save();
+      const warte = /retry in ([0-9]+)m/i.exec(e.message);
+      sag(`${fertig} von ${offen.length} analysiert, dann gestoppt.` +
+          (warte ? ` Google-Kontingent erschöpft – in etwa ${warte[1]} Minuten wieder möglich.` : ` ${e.message}`));
+      kiStapelLaeuft = false; UI.queue = null; render();
+      return;
     }
     await new Promise(r => setTimeout(r, KI_PAUSE_MS));
   }
