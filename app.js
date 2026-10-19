@@ -1178,7 +1178,7 @@ function fehlerText(e) {
 /* Vor dem Ausliefern hier die eigene Worker-Adresse eintragen. Dann braucht
    kein Nutzer etwas einzustellen – das Feld in den Einstellungen dient nur noch
    zum Überschreiben während der Entwicklung. */
-const STANDARD_WORKER = '';
+const STANDARD_WORKER = 'https://outfit-ki.alexander-webner18.workers.dev';
 
 const dienstUrl = () =>
   (((DB.prefs && DB.prefs.worker) || STANDARD_WORKER) || '').replace(/\/+$/, '');
@@ -2593,8 +2593,7 @@ App.analyseEins = async id => {
     toast('Analysiert');
     render();
   } catch (e) {
-    console.warn(e);
-    toast(e.message || 'Analyse fehlgeschlagen');
+    toast(fehlerText(e));
   }
 };
 /* Googles Minutengrenze liegt bei etwa 10 Abfragen. 400 ms Pause wären 150/min
@@ -2640,17 +2639,18 @@ App.analyseAlle = async () => {
         continue;
       }
       save();
-      fehlerText(e);                       /* füllt kiDetail für die Details-Ansicht */
-      const warte = /retry in ([0-9]+)m/i.exec(String(e.message || ''));
-      sag(`${fertig} von ${offen.length} Teilen in ${abfragen} Abfragen analysiert, dann gestoppt.` +
-          (warte ? ` Kontingent erschöpft, in etwa ${warte[1]} Minuten wieder möglich.` : ''));
+      /* Vorher fiel hier bei allem außer dem Kontingent der Grund weg –
+         übrig blieb ein nacktes „dann gestoppt". */
+      const grund = fehlerText(e);
+      sag(`${fertig} von ${offen.length} Teilen analysiert. ${grund}` +
+          (entwicklermodus() ? ` (${abfragen} ${abfragen === 1 ? 'Abfrage' : 'Abfragen'})` : ''));
       kiStapelLaeuft = false; UI.queue = null; render();
       return;
     }
     await new Promise(r => setTimeout(r, KI_PAUSE_MS));
   }
   kiStapelLaeuft = false;
-  sag(`Fertig: ${fertig} Teile in ${abfragen} Abfragen analysiert.`);
+  sag(`Fertig: ${fertig} Teile analysiert.`);
   UI.queue = null;
   render();
 };
@@ -2807,6 +2807,25 @@ const onScroll = () => topbar && topbar.classList.toggle('scrolled', window.scro
 window.addEventListener('scroll', onScroll, { passive: true });
 onScroll();
 
+/* Updates für die Homebildschirm-App. iOS hält die App im Speicher und schaut
+   von sich aus selten nach einer neuen Fassung. Deshalb: beim Start und bei
+   jeder Rückkehr in die App aktiv nachfragen, und sobald eine neue Fassung die
+   Kontrolle übernimmt, einmal neu laden – sonst läuft bis zum nächsten
+   Kaltstart der alte Code weiter. */
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+      reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    } catch (e) { /* ohne Service Worker läuft die App trotzdem, nur nicht offline */ }
+  });
+  let neuGeladen = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (neuGeladen) return;
+    neuGeladen = true;
+    location.reload();
+  });
 }
