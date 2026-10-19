@@ -1184,10 +1184,11 @@ async function antwortLesen(res) {
 
 /* Mehrere Teile in einer Abfrage. Googles Tagesgrenze zählt Abfragen, nicht
    Bilder – ein Fünferpäckchen verfünffacht damit den Durchsatz. */
-/* Zwölf ist der Kompromiss: die Ausgabe bleibt weit unter der Längengrenze,
-   das Modell verwechselt die Nummern noch nicht, und ein Abbruch kostet
-   höchstens zwölf Teile statt aller. 173 Teile brauchen so 15 Abfragen. */
-const KI_PAKET = 12;
+/* Zwanzig je Abfrage. Zwölf liefen in der Praxis vollständig zurück, die Ausgabe
+   liegt bei zwanzig Ergebnissen noch weit unter der Längengrenze (rund 1.300 von
+   8.192 Tokens). Googles Tagesgrenze zählt Abfragen, nicht Bilder – deshalb zählt
+   hier jede eingesparte Abfrage doppelt. */
+const KI_PAKET = 20;
 
 async function kiAnalyseMehrere(items) {
   const basis = dienstUrl();
@@ -1760,8 +1761,9 @@ function renderData() {
     <p class="hint" style="margin:0 0 10px">${(() => {
       const offen = DB.items.filter(i => !istAnalysiert(i)).length;
       return offen ? `${offen} von ${DB.items.length} Teilen sind noch nicht analysiert.
-        Je Abfrage werden ${KI_PAKET} Teile zusammen geschickt – das schont Googles Tageskontingent,
-        das Abfragen zählt und nicht Bilder. Bei Erschöpfung macht die App später dort weiter.`
+        Je Abfrage gehen ${KI_PAKET} Teile zusammen raus, das sind ${Math.ceil(offen / KI_PAKET)} Abfragen.
+        Googles Grenze zählt Abfragen, nicht Bilder – und Fehlversuche zählen mit.
+        Bei Erschöpfung macht die App später dort weiter.`
         : 'Alle Teile sind analysiert.';
     })()}</p>
     <div class="btn-row">
@@ -2531,7 +2533,7 @@ App.analyseAlle = async () => {
   const offen = DB.items.filter(i => !istAnalysiert(i));
   if (!offen.length) return;
 
-  let fertig = 0, sammeln = true;
+  let fertig = 0, sammeln = true, abfragen = 0;
   kiStapelLaeuft = true;
 
   const pakete = [];
@@ -2543,6 +2545,7 @@ App.analyseAlle = async () => {
     sag(`${fertig} von ${offen.length} · noch etwa ${restMin} Min.`);
     try {
       if (sammeln) {
+        abfragen++;
         const erg = await kiAnalyseMehrere(paket);
         let imPaket = 0;
         for (const { item, a } of erg) if (a) { kiUebernehmen(item, a); fertig++; imPaket++; }
@@ -2565,15 +2568,17 @@ App.analyseAlle = async () => {
       }
       save();
       const warte = /retry in ([0-9]+)m/i.exec(e.message);
-      sag(`${fertig} von ${offen.length} analysiert, dann gestoppt.` +
-          (warte ? ` Google-Kontingent erschöpft – in etwa ${warte[1]} Minuten wieder möglich.` : ` ${e.message}`));
+      sag(`${fertig} von ${offen.length} analysiert in ${abfragen} Abfragen, dann gestoppt.` +
+          (warte ? ` Google-Kontingent erschöpft – in etwa ${warte[1]} Minuten wieder möglich.` +
+                   ' Tipp: unter ai.dev/rate-limit siehst du deinen echten Verbrauch.'
+                 : ` ${e.message}`));
       kiStapelLaeuft = false; UI.queue = null; render();
       return;
     }
     await new Promise(r => setTimeout(r, KI_PAUSE_MS));
   }
   kiStapelLaeuft = false;
-  sag(`Fertig: ${fertig} Teile analysiert.`);
+  sag(`Fertig: ${fertig} Teile in ${abfragen} Abfragen analysiert.`);
   UI.queue = null;
   render();
 };
