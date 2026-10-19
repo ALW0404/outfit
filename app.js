@@ -1134,11 +1134,55 @@ function ensureQueue() {
   suggest(12, UI.queue).forEach(c => { if (!da.has(outfitKey(c.ids))) UI.queue.push(c); });
 }
 
+/* Technische Fehler in eine Sprache übersetzen, die in einer App etwas zu
+   suchen hat. Die Rohmeldung landet in kiDetail und in der Konsole – sichtbar
+   nur dort, wo man sie zum Einrichten braucht. */
+let kiDetail = '';
+
+/* Meldungen richten sich danach, **wer** etwas tun kann.
+
+   Ein Nutzer aus dem Store kann weder ein Modell umstellen noch einen Schlüssel
+   hinterlegen. Ihm zu schreiben „Das eingestellte KI-Modell ist nicht verfügbar"
+   hilft ihm nicht, sondern lässt die App kaputt wirken. Solche Fälle sind Sache
+   des Betreibers – der Nutzer bekommt nur zu wissen, dass es vorübergehend ist
+   und dass der Rest der App weiterläuft.
+
+   Die Rohmeldung landet in kiDetail und in der Konsole, sichtbar in den
+   Entwicklereinstellungen. */
+function fehlerText(e) {
+  const m = String((e && e.message) || e || '');
+  kiDetail = m;
+  console.warn('KI-Dienst:', m);
+
+  /* Fälle, in denen der Nutzer selbst etwas tun kann */
+  if (/erreichbar|Failed to fetch|NetworkError|Load failed/i.test(m)) {
+    return 'Keine Verbindung. Prüf dein Netz und versuch es gleich noch einmal.';
+  }
+  const warte = /retry in ([0-9]+)m/i.exec(m);
+  if (/429|quota|kontingent/i.test(m)) {
+    return warte
+      ? `Die Stilanalyse ist gerade ausgelastet. In etwa ${warte[1]} Minuten wieder möglich.`
+      : 'Die Stilanalyse ist gerade ausgelastet. Versuch es später noch einmal.';
+  }
+  if (/Mindestens drei Pins/i.test(m)) return m;
+
+  /* Alles Übrige kann nur der Betreiber beheben – Modellname, Schlüssel,
+     Freigabe, fehlende Einrichtung. Für den Nutzer ist das dasselbe. */
+  return 'Die Stilanalyse ist zurzeit nicht verfügbar. Dein Schrank und deine Outfits funktionieren normal weiter.';
+}
+
 /* ================= KI-Dienst =================
    Die App spricht ausschließlich mit dem eigenen Cloudflare Worker.
    Der Gemini-Schlüssel liegt dort und niemals hier: clientseitiges
    JavaScript ist öffentlich lesbar. */
-const dienstUrl = () => ((DB.prefs && DB.prefs.worker) || '').replace(/\/+$/, '');
+/* Vor dem Ausliefern hier die eigene Worker-Adresse eintragen. Dann braucht
+   kein Nutzer etwas einzustellen – das Feld in den Einstellungen dient nur noch
+   zum Überschreiben während der Entwicklung. */
+const STANDARD_WORKER = '';
+
+const dienstUrl = () =>
+  (((DB.prefs && DB.prefs.worker) || STANDARD_WORKER) || '').replace(/\/+$/, '');
+const entwicklermodus = () => !!(DB.prefs && DB.prefs.entwickler);
 
 /* Fürs Analysieren reichen 512 px – spart Übertragung und Kosten */
 async function bildFuerAnalyse(picId, max = 512) {
@@ -1733,7 +1777,8 @@ function renderData() {
     <h2>Daten</h2>
     <p class="hint">Alles liegt auf diesem Gerät: ${n} ${n === 1 ? 'Teil' : 'Teile'}, ${DB.trends.length} Pins,
     ${DB.outfits.length} gemerkte Outfits.</p>
-    <p class="small" id="usage">Speicher wird ermittelt …</p>
+    <p class="small" id="usage" onclick="App.tippSpeicher()">Speicher wird ermittelt …</p>
+    ${entwicklermodus() ? '<p class="small">Entwicklereinstellungen sichtbar. Fünfmal auf die Speicherzeile tippen blendet sie wieder aus.</p>' : ''}
   </div>
   <div class="card">
     <h3>Sichern</h3>
@@ -1744,7 +1789,7 @@ function renderData() {
     <h3>Zurückholen</h3>
     <button class="btn block" onclick="App.chooseImport()">Backup einlesen</button>
   </div>
-  <div class="card">
+  ${entwicklermodus() ? `<div class="card">
     <h3>KI-Dienst</h3>
     <p class="hint" style="margin:0 0 10px">Adresse deines Cloudflare Workers. Der Gemini-Schlüssel
     liegt dort, nicht in der App.</p>
@@ -1755,20 +1800,29 @@ function renderData() {
     </label>
     <div class="btn-row">
       <button class="btn small" onclick="App.testWorker()">Verbindung prüfen</button>
-      <span class="small" id="ki-status" style="white-space:pre-line">${esc(kiStatus)}</span>
+      <span class="small" id="ki-status">${esc(kiStatus)}</span>
     </div>
+    ${kiPunkte.length ? `<ul class="small" style="margin:8px 0 0; padding-left:18px">
+      ${kiPunkte.map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
+    ${kiDetail ? `<div style="margin-top:8px">
+      <button class="btn small" onclick="App.kiDetailZeigen()">${kiZeigeDetail ? 'Details ausblenden' : 'Technische Details'}</button>
+      ${kiZeigeDetail ? `<pre class="detail">${esc(kiDetail)}</pre>` : ''}
+    </div>` : ''}
+  </div>` : ''}
+  <div class="card">
     <h3>Teile analysieren</h3>
     <p class="hint" style="margin:0 0 10px">${(() => {
       const offen = DB.items.filter(i => !istAnalysiert(i)).length;
-      return offen ? `${offen} von ${DB.items.length} Teilen sind noch nicht analysiert.
-        Je Abfrage gehen ${KI_PAKET} Teile zusammen raus, das sind ${Math.ceil(offen / KI_PAKET)} Abfragen.
-        Googles Grenze zählt Abfragen, nicht Bilder – und Fehlversuche zählen mit.
-        Bei Erschöpfung macht die App später dort weiter.`
+      if (!dienstUrl()) return 'Die Stilanalyse ist zurzeit nicht verfügbar.';
+      return offen
+        ? `${offen} von ${DB.items.length} Teilen haben noch keine Stilmerkmale.
+           Die Analyse erkennt Silhouette, Material und Muster – damit werden die Vorschläge
+           deutlich treffsicherer. Bricht sie ab, macht sie beim nächsten Mal dort weiter.`
         : 'Alle Teile sind analysiert.';
     })()}</p>
     <div class="btn-row">
       <button class="btn" onclick="App.analyseAlle()"
-        ${DB.items.some(i => !istAnalysiert(i)) ? '' : 'disabled'}>${ico('sparkle')} Stapel starten</button>
+        ${DB.items.some(i => !istAnalysiert(i)) && dienstUrl() ? '' : 'disabled'}>${ico('sparkle')} Analyse starten</button>
       <button class="btn small" onclick="App.analyseStopp()">Anhalten</button>
     </div>
     <p class="small" id="ki-fortschritt">${esc(kiMeldung)}</p>
@@ -2461,7 +2515,25 @@ App.delTrend = async id => {
 
 let kiMeldung = '';
 let kiStatus = '';
+let kiPunkte = [];
+let kiZeigeDetail = false;
 let kiStapelLaeuft = false;
+
+/* Klassischer Weg zu versteckten Einstellungen: fünfmal auf die Speicherzeile
+   tippen. So sieht ein normaler Nutzer die Betreiber-Einstellungen nie. */
+let speicherTipps = 0, speicherTippZeit = 0;
+App.tippSpeicher = () => {
+  const jetzt = Date.now();
+  speicherTipps = (jetzt - speicherTippZeit < 2000) ? speicherTipps + 1 : 1;
+  speicherTippZeit = jetzt;
+  if (speicherTipps < 5) return;
+  speicherTipps = 0;
+  DB.prefs = DB.prefs || {};
+  DB.prefs.entwickler = !DB.prefs.entwickler;
+  save();
+  toast(DB.prefs.entwickler ? 'Entwicklereinstellungen sichtbar' : 'Entwicklereinstellungen versteckt');
+  render();
+};
 
 /* --- KI --- */
 App.setWorker = v => {
@@ -2470,42 +2542,43 @@ App.setWorker = v => {
   save();                                   /* kein render(): Textfeld behält den Fokus */
 };
 App.testWorker = async () => {
-  kiStatus = 'prüfe …';
-  render();
+  kiStatus = 'prüfe …'; kiPunkte = []; kiDetail = ''; render();
   const basis = dienstUrl();
-  if (!basis) { kiStatus = 'Keine Adresse eingetragen'; render(); return; }
+  if (!basis) { kiStatus = 'Keine Adresse eingetragen.'; render(); return; }
   try {
     const res = await fetch(basis + '/status');
     const j = await res.json().catch(() => ({}));
-    if (!res.ok) { kiStatus = 'Antwort ' + res.status; render(); return; }
-    const zeilen = [`Erreichbar · Modell ${j.modell || '?'} · heute ${j.heute ?? 0} von ${j.limit ?? '?'}`];
-    if (j.bereit === false) zeilen.push('Noch nicht einsatzbereit.');
-    const k = j.schluessel;
-    if (k && k.vorhanden) zeilen.push(`Schlüssel: ${k.laenge} Zeichen · Format ${k.format || '?'}${k.enthaeltLeerzeichen ? ' · enthält Leerzeichen' : ''}`);
-    (j.offen || []).forEach(o => zeilen.push('• ' + o));
-    if (j.bereit && !(j.offen || []).length) zeilen.push('Alles eingerichtet.');
-    /* Prüfen, ob das eingestellte Modell für diesen Schlüssel überhaupt existiert */
-    try {
-      const m = await (await fetch(basis + '/modelle')).json();
-      if (Array.isArray(m.nutzbar)) {
-        if (m.anmeldeweg) zeilen.push(`Anmeldung über ${m.anmeldeweg} erfolgreich.`);
-        if (!m.nutzbar.includes(m.eingestellt)) {
-          zeilen.push(`• Modell "${m.eingestellt}" gibt es für deinen Schlüssel nicht.`);
-          zeilen.push('  Verfügbar u. a.: ' + m.nutzbar.filter(n => /flash|pro/.test(n)).slice(0, 6).join(', '));
-        } else {
-          zeilen.push(`Modell "${m.eingestellt}" ist nutzbar.`);
-        }
-      } else if (m.fehler) {
-        zeilen.push('• ' + m.fehler);
-        (m.tipps || []).forEach(x => zeilen.push('   – ' + x));
-      }
-    } catch {}
-    kiStatus = zeilen.join('\n');
+    if (!res.ok) { kiStatus = 'Der Dienst antwortet nicht richtig.'; kiDetail = 'HTTP ' + res.status; render(); return; }
+
+    const m = await (await fetch(basis + '/modelle')).json().catch(() => ({}));
+    const modellOk = Array.isArray(m.nutzbar) && m.nutzbar.includes(m.eingestellt);
+
+    kiPunkte = [];
+    if (j.bereit === false) kiPunkte.push('Zugangsschlüssel fehlt');
+    if (Array.isArray(m.nutzbar) && !modellOk) kiPunkte.push(`Modell „${m.eingestellt}" ist nicht nutzbar`);
+    if (m.fehler) kiPunkte.push('Der Zugang wird abgelehnt');
+    (j.offen || []).forEach(o => {
+      if (/ZAEHLER/.test(o)) kiPunkte.push('Tageslimit greift noch nicht');
+      else if (/ALLOW_ORIGIN/.test(o)) kiPunkte.push('Dienst ist für jeden offen');
+      else if (/Leerzeichen/.test(o)) kiPunkte.push('Schlüssel enthält ein Leerzeichen');
+    });
+
+    kiStatus = (j.bereit && modellOk && !m.fehler && !kiPunkte.length)
+      ? `Einsatzbereit · Modell ${m.eingestellt} · heute ${j.heute ?? 0} von ${j.limit ?? '?'}`
+      : (j.bereit && modellOk && !m.fehler)
+        ? `Läuft · Modell ${m.eingestellt} · heute ${j.heute ?? 0} von ${j.limit ?? '?'}`
+        : 'Noch nicht einsatzbereit.';
+
+    kiDetail = JSON.stringify({ status: j, modelle: m.fehler ? m : { eingestellt: m.eingestellt,
+      anmeldeweg: m.anmeldeweg, anzahlNutzbar: (m.nutzbar || []).length } }, null, 1);
   } catch (e) {
-    kiStatus = 'Nicht erreichbar. Adresse prüfen, oder ALLOW_ORIGIN passt nicht zu dieser Seite.';
+    kiStatus = 'Der KI-Dienst ist nicht erreichbar.';
+    kiDetail = String(e.message || e);
   }
   render();
 };
+App.kiDetailZeigen = () => { kiZeigeDetail = !kiZeigeDetail; render(); };
+
 App.analyseEins = async id => {
   const it = itemById(id);
   if (!it) return;
@@ -2567,11 +2640,10 @@ App.analyseAlle = async () => {
         continue;
       }
       save();
-      const warte = /retry in ([0-9]+)m/i.exec(e.message);
-      sag(`${fertig} von ${offen.length} analysiert in ${abfragen} Abfragen, dann gestoppt.` +
-          (warte ? ` Google-Kontingent erschöpft – in etwa ${warte[1]} Minuten wieder möglich.` +
-                   ' Tipp: unter ai.dev/rate-limit siehst du deinen echten Verbrauch.'
-                 : ` ${e.message}`));
+      fehlerText(e);                       /* füllt kiDetail für die Details-Ansicht */
+      const warte = /retry in ([0-9]+)m/i.exec(String(e.message || ''));
+      sag(`${fertig} von ${offen.length} Teilen in ${abfragen} Abfragen analysiert, dann gestoppt.` +
+          (warte ? ` Kontingent erschöpft, in etwa ${warte[1]} Minuten wieder möglich.` : ''));
       kiStapelLaeuft = false; UI.queue = null; render();
       return;
     }
@@ -2602,8 +2674,7 @@ App.profilErstellen = async () => {
     toast('Stilprofil erstellt');
     render();
   } catch (e) {
-    console.warn(e);
-    toast(e.message || 'Hat nicht geklappt');
+    toast(fehlerText(e));
   }
 };
 App.profilLoeschen = () => {

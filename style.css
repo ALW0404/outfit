@@ -319,3 +319,8 @@ label.fld > *{margin-top:6px; font-weight:400; text-transform:none; letter-spaci
   border:2.5px solid var(--line-2); border-top-color:var(--accent);
   animation:spin .8s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
+.detail{
+  background:var(--surface-2); border-radius:var(--r-sm); padding:10px 12px; margin:8px 0 0;
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; line-height:1.5;
+  color:var(--ink-2); white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto;
+}
