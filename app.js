@@ -30,6 +30,7 @@ const ICONS = {
   sparkle: '<path d="M12 3.2 13.8 8.4 19 10.2 13.8 12 12 17.2 10.2 12 5 10.2 10.2 8.4 12 3.2Z"/><path d="M18.5 16.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2Z"/>',
   x:       '<path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/>',
   again:   '<path d="M3.5 12a8.5 8.5 0 1 0 2.9-6.4"/><path d="M3.2 4v5h5"/>',
+  thumb:   '<path d="M7.5 10.5v9.3H4.6a1 1 0 0 1-1-1v-7.3a1 1 0 0 1 1-1h2.9Z"/><path d="M7.5 10.5 11.2 3.6a2 2 0 0 1 2.4 2.2l-.6 3.9h5.3a2 2 0 0 1 2 2.4l-1.3 6.2a2 2 0 0 1-2 1.5H7.5"/>',
   heart:   '<path d="M12 20.3s-7.3-4.5-7.3-9.7a4.3 4.3 0 0 1 7.3-3 4.3 4.3 0 0 1 7.3 3c0 5.2-7.3 9.7-7.3 9.7Z"/>',
   lock:    '<rect x="4.8" y="10.8" width="14.4" height="9.7" rx="2.2"/><path d="M8.2 10.8V7.2a3.8 3.8 0 0 1 7.6 0v3.6"/>',
   unlock:  '<rect x="4.8" y="10.8" width="14.4" height="9.7" rx="2.2"/><path d="M8.2 10.8V7.2a3.8 3.8 0 0 1 6.9-2.2"/>',
@@ -326,11 +327,15 @@ const istUngenutzt = id => {
 
 const seasonTodoCount = () => DB.items.filter(i => i.seasonsAuto).length;
 
+const LIKE_PAUSE_TAGE = 14;
 /* Kombinationen, die nicht mehr vorgeschlagen werden sollen */
 function blockedKeys() {
   const heute = todayISO();
   const s = new Set(DB.tossed || []);
   Object.entries(DB.snoozed || {}).forEach(([k, d]) => { if (d === heute) s.add(k); });
+  /* Like heißt „geht, aber nicht begeisternd" – zwei Wochen Ruhe, dann darf es wiederkommen */
+  const grenze = localISO(new Date(Date.now() - LIKE_PAUSE_TAGE * 864e5));
+  Object.entries(DB.okay || {}).forEach(([k, d]) => { if (d > grenze) s.add(k); });
   (DB.outfits || []).forEach(o => s.add(outfitKey(o.ids)));
   return s;
 }
@@ -1167,17 +1172,24 @@ const TOSS_GRUENDE = [
   ['zuleger', 'Zu leger'], ['stil', 'Stilbruch'], ['saison', 'Jahreszeit']
 ];
 
+const LIKE_GEWICHT = 0.5;
 let _lernen = null, _lernenStand = '';
 function lernstand() {
   const alleToss = [...new Set([...(DB.tossArchiv || []), ...(DB.tossed || [])])];
-  const stand = alleToss.length + '|' + (DB.outfits || []).length + '|' + DB.items.length;
+  const stand = alleToss.length + '|' + (DB.outfits || []).length + '|' +
+    Object.keys(DB.okay || {}).length + '|' + DB.items.length;
   if (_lernen && _lernenStand === stand) return _lernen;
   const zuItems = ids => ids.map(itemById).filter(Boolean);
   const verworfen = alleToss.map(k => zuItems(k.split('|'))).filter(x => x.length >= 2);
-  const gemerkt = (DB.outfits || []).map(o => zuItems(o.ids)).filter(x => x.length >= 2);
-  const T = verworfen.length, S = gemerkt.length;
+  /* Positiv zählen gemerkte Outfits voll, „Like" halb: tragbar, aber kein Vorbild */
+  const gemerkt = [
+    ...(DB.outfits || []).map(o => ({ it: zuItems(o.ids), w: 1 })),
+    ...Object.keys(DB.okay || {}).map(k => ({ it: zuItems(k.split('|')), w: LIKE_GEWICHT }))
+  ].filter(x => x.it.length >= 2);
+  const T = verworfen.length, S = gemerkt.reduce((a, x) => a + x.w, 0);
   const merkmale = MERKMALE.map(m => {
-    const t = verworfen.filter(m.test).length, g = gemerkt.filter(m.test).length;
+    const t = verworfen.filter(m.test).length;
+    const g = gemerkt.reduce((a, x) => a + (m.test(x.it) ? x.w : 0), 0);
     /* Verhältnis der Anteile, geglättet – bei wenigen Daten bleibt es nahe 1 */
     const verh = ((t + 1) / (T + 2)) / ((g + 1) / (S + 2));
     return { ...m, t, g, verh,
@@ -1639,6 +1651,8 @@ async function kiStylist(season, mood) {
         stylingregeln: p.stylingregeln || [],
         stil: p.stil || [], silhouetten: p.silhouetten || [], materialien: p.materialien || [] } : null,
       regeln: gelernteSaetze(),
+      okay: Object.entries(DB.okay || {}).sort((a, b) => b[1].localeCompare(a[1]))
+        .map(([k]) => alsCodes(k.split('|'))).filter(Boolean).slice(0, 15),
       gemocht, verworfen
     })
   });
@@ -1748,11 +1762,11 @@ function renderToday() {
   const moods = [[2, 'Leger'], [3, 'Normal'], [4, 'Schick'], [SPORT_ANLASS, 'Sport']];
   const c = wartet ? null : UI.queue[0];
   const saisonLbl = esc(SEASONS.find(x => x.key === UI.season).label);
-  return `<div class="card">
-    <h3>Jahreszeit</h3>
-    ${seasonChips(UI.season, 'App.setSeason')}
-    <h3>Anlass</h3>
-    <div class="chips">${moods.map(([v, l]) =>
+  /* Kompakt: Auswahl, Karte und Knöpfe sollen ohne Scrollen auf den Bildschirm passen */
+  return `<div class="card kompakt wahl">
+    <div class="chips zeile">${SEASONS.map(x =>
+      `<button class="chip ${UI.season === x.key ? 'active' : ''}" onclick="App.setSeason('${x.key}')">${x.label}</button>`).join('')}</div>
+    <div class="chips zeile">${moods.map(([v, l]) =>
       `<button class="chip ${UI.mood === v ? 'active' : ''}" onclick="App.setMood(${v})">${l}</button>`).join('')}</div>
   </div>
   ${wartet ? `<div class="card stylist-laedt">
@@ -1761,7 +1775,7 @@ function renderToday() {
       <p class="hint">Sie geht deinen Schrank für ${saisonLbl} durch. Das dauert ein paar Sekunden.</p>
       <button class="btn small" onclick="App.stylistNichtWarten()">Nicht warten</button>
     </div>`
-  : c ? tossFrageHTML() + swipeHTML(c) + stylistFussHTML()
+  : c ? swipeHTML(c) + stylistFussHTML()
   : (() => {
       const luecke = poolLuecke(UI.season);
       const sport = istSportModus();
@@ -1777,23 +1791,13 @@ function renderToday() {
         : !geht
         ? `Mit den Teilen für ${saisonLbl} lässt sich für diesen Anlass kein stimmiges Outfit bilden.
            Probier einen anderen Anlass oder prüfe die Jahreszeiten im Schrank.`
-        : `Keine weiteren Kombinationen für ${saisonLbl} und diesen Anlass. Morgen kommen die
-           „Not today\"-Vorschläge wieder – oder du änderst oben die Auswahl.`;
+        : `Keine weiteren Kombinationen für ${saisonLbl} und diesen Anlass. Mit „Like\" bewertete
+           kommen nach zwei Wochen wieder – oder du änderst oben die Auswahl.`;
       return `<div class="card"><h2>${titel}</h2>
       <p class="hint">${text}</p>
       ${geht && dienstUrl() && !stylistLaeuft ? `<button class="btn block" onclick="App.stylistNeu()">${ico('sparkle')} Neue Ideen der Stylistin</button>` : ''}
       ${geht && (DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen (${DB.tossed.length})</button>` : ''}
     </div>`; })()}`;
-}
-
-/* Nach einem Toss: woran lag's? Ein Tipp genügt, Überspringen geht durch
-   einfaches Weiterwischen. Aus einem Grund lernt die Stylistin viel mehr als
-   aus einer bloßen Ablehnung. */
-function tossFrageHTML() {
-  if (!UI.letzterToss) return '';
-  return `<div class="tossfrage"><span class="small">Was hat nicht gepasst?</span>
-    <div class="chips">${TOSS_GRUENDE.map(([k, l]) =>
-      `<button class="chip" onclick="App.tossGrund('${k}')">${l}</button>`).join('')}</div></div>`;
 }
 
 /* Unter der Karte: woher der Vorschlag kommt – und die Möglichkeit, neue
@@ -1807,27 +1811,29 @@ function stylistFussHTML() {
 
 function swipeHTML(c) {
   const items = c.ids.map(itemById).filter(Boolean);
-  const worlds = outfitWorlds(items);
+  const offen = UI.tossOffen === outfitKey(c.ids);
   return `<div class="swipe">
-    <div class="swipe-card" id="card">
+    <div class="swipe-card${offen ? ' toss-offen' : ''}" id="card">
       <div class="stamp take">TAKE</div>
+      <div class="stamp like">LIKE</div>
       <div class="stamp toss">TOSS</div>
-      <div class="stamp skip">NOT TODAY</div>
       ${collageHTML(items)}
       ${c.grund ? `<p class="grund">${ico('sparkle')}<span>${esc(c.grund)}</span></p>` : ''}
-      <p class="small" style="margin:10px 0 6px">${items.map(it =>
-        esc(it.name || CATS[it.cat].label)).join(' · ')}</p>
-      <span class="worldtags">${worlds.length
-        ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
-        : '<span class="wtag">nur Neutral</span>'}</span>
+      <p class="small teilnamen">${items.map(it => esc(it.name || CATS[it.cat].label)).join(' · ')}</p>
     </div>
   </div>
-  <div class="swipe-actions">
-    <button class="act toss" onclick="App.decide('toss')" aria-label="Toss">${ico('x')}<span>Toss</span></button>
-    <button class="act skip" onclick="App.decide('skip')" aria-label="Not today">${ico('again')}<span>Not today</span></button>
+  ${offen ? `<div class="tosspanel">
+    <button class="tosszu" onclick="App.tossZurueck()" aria-label="Doch nicht verwerfen">${ico('x')}</button>
+    <p class="small">Was hat nicht gepasst?</p>
+    <div class="chips">${TOSS_GRUENDE.map(([k, l]) =>
+      `<button class="chip" onclick="App.tossMit('${k}')">${l}</button>`).join('')}
+      <button class="chip leise" onclick="App.tossMit('')">k. A.</button></div>
+  </div>`
+  : `<div class="swipe-actions">
+    <button class="act toss" onclick="App.tossFrage()" aria-label="Toss">${ico('x')}<span>Toss</span></button>
+    <button class="act like" onclick="App.decide('like')" aria-label="Like">${ico('thumb')}<span>Like</span></button>
     <button class="act take" onclick="App.decide('take')" aria-label="Take">${ico('heart')}<span>Take</span></button>
-  </div>
-  <p class="small center">Nach rechts wischen für Take, nach links für Toss.</p>`;
+  </div>`}`;
 }
 
 /* --- Nachsortieren nach der Migration --- */
@@ -2434,6 +2440,7 @@ function attachSwipe() {
   const card = $('#card');
   if (!card) return;
   const SCHWELLE = 85;
+  if (card.classList.contains('toss-offen')) return;   /* erst Grund wählen */
   let sx = 0, sy = 0, dx = 0, dy = 0, zieht = false;
   const stamps = k => card.querySelector('.stamp.' + k);
   const zeige = () => {
@@ -2456,7 +2463,8 @@ function attachSwipe() {
     if (!zieht) return;
     zieht = false;
     card.style.transition = 'transform .25s ease, opacity .25s ease';
-    if (Math.abs(dx) > SCHWELLE) App.decide(dx > 0 ? 'take' : 'toss');
+    if (dx > SCHWELLE) App.decide('take');
+    else if (dx < -SCHWELLE) App.tossFrage();
     else {
       card.style.transform = '';
       card.querySelectorAll('.stamp').forEach(s => s.style.opacity = 0);
@@ -2488,12 +2496,15 @@ App.setSeason = s => { UI.season = s; UI.queue = null; render(); };
 App.setMood = v => { UI.mood = v; UI.queue = null; render(); };
 
 /* Take / Toss / Not today */
-App.decide = what => {
+/* Take: Favorit, wandert in Outfits.
+   Like: tragbar, aber nicht souverän – kein Favorit, aber auch kein Fehler.
+         Für das Lernen ein schwaches Plus, zwei Wochen Ruhe.
+   Toss: klappt zuerst die Frage nach dem Grund auf, direkt unter der Karte. */
+App.decide = (what, grund) => {
   const c = UI.queue && UI.queue[0];
   if (!c) return;
   const key = outfitKey(c.ids);
-  /* Grund nur für das gerade verworfene Outfit anbieten, danach verschwindet die Frage */
-  UI.letzterToss = what === 'toss' ? key : null;
+  UI.tossOffen = null;
   if (what === 'take') {
     if (!DB.outfits.some(o => outfitKey(o.ids) === key)) {
       DB.outfits.push({ id: uid(), date: todayISO(), ids: [...c.ids], liked: true,
@@ -2503,32 +2514,32 @@ App.decide = what => {
   } else if (what === 'toss') {
     DB.tossed = DB.tossed || [];
     if (!DB.tossed.includes(key)) DB.tossed.push(key);
+    if (grund) { DB.tossGruende = DB.tossGruende || {}; DB.tossGruende[key] = grund; }
   } else {
-    DB.snoozed = DB.snoozed || {};
-    DB.snoozed[key] = todayISO();       /* morgen wieder im Spiel */
+    DB.okay = DB.okay || {};
+    DB.okay[key] = todayISO();
   }
   save();
   UI.queue.shift();
   const card = $('#card');
   if (!card) return render();
   const x = what === 'take' ? 520 : what === 'toss' ? -520 : 0;
-  const y = what === 'skip' ? 420 : 0;
+  const y = what === 'like' ? -480 : 0;
   card.style.transition = 'transform .25s ease, opacity .25s ease';
   card.style.transform = `translate(${x}px, ${y}px) rotate(${x / 24}deg)`;
   card.style.opacity = '0';
-  if (what === 'skip') card.querySelector('.stamp.skip').style.opacity = 1;
+  card.querySelector('.stamp.' + what).style.opacity = 1;
   setTimeout(render, 230);
 };
-App.stylistNeu = () => stylistHolen(true);
-App.tossGrund = g => {
-  if (!UI.letzterToss) return;
-  DB.tossGruende = DB.tossGruende || {};
-  DB.tossGruende[UI.letzterToss] = g;
-  UI.letzterToss = null;
-  save();
-  toast('Danke – fließt in die nächsten Vorschläge ein');
+App.tossFrage = () => {
+  const c = UI.queue && UI.queue[0];
+  if (!c) return;
+  UI.tossOffen = outfitKey(c.ids);
   render();
 };
+App.tossMit = grund => App.decide('toss', grund);
+App.tossZurueck = () => { UI.tossOffen = null; render(); };
+App.stylistNeu = () => stylistHolen(true);
 /* Wer nicht warten will, bekommt sofort die lokale Auswahl; die Ergebnisse
    der Stylistin rücken nach, sobald sie da sind. */
 App.stylistNichtWarten = () => { UI.ohneStylist = stylistSchluessel(); UI.queue = null; render(); };
@@ -3201,6 +3212,7 @@ function zusammenfuehren(inc) {
 
   DB.tossed = [...new Set([...(DB.tossed || []), ...(inc.tossed || [])])];
   DB.tossGruende = { ...(inc.tossGruende || {}), ...(DB.tossGruende || {}) };
+  DB.okay = { ...(inc.okay || {}), ...(DB.okay || {}) };
   DB.tossArchiv = [...new Set([...(DB.tossArchiv || []), ...(inc.tossArchiv || [])])].slice(-3000);
 
   if (inc.profil && (!DB.profil || (inc.profil.erstellt || '') > (DB.profil.erstellt || ''))) {

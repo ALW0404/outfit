@@ -210,10 +210,19 @@ label.fld > *{margin-top:6px; font-weight:400; text-transform:none; letter-spaci
 .collage.klein .osticker{top:5px; right:5px; padding:3px 7px; font-size:11px;}
 
 /* ---------- KI-Stylistin ---------- */
-.tossfrage{margin:0 0 10px; padding:10px 12px; border-radius:var(--r-md);
-  background:var(--surface-2);}
-.tossfrage .chips{margin-top:6px;}
-.tossfrage .chip{padding:6px 11px; font-size:12.5px;}
+.tosspanel{position:relative; margin:0 0 8px; padding:8px 10px 6px; border-radius:var(--r-md);
+  background:var(--surface-2); text-align:center;}
+.tosspanel p{margin:0;}
+.tosspanel .chips{justify-content:center; gap:5px; margin:6px 0 2px;}
+.tosspanel .chip{padding:4px 10px; min-height:30px; font-size:12.5px;}
+.tosszu{position:absolute; top:4px; right:4px; width:30px; height:30px; border:0; background:none;
+  color:var(--ink-3); display:flex; align-items:center; justify-content:center;}
+.tosszu .i{width:17px; height:17px;}
+/* Aufgeklappte Gründe brauchen mehr Platz als die Knöpfe – die Collage gibt ihn her */
+.swipe-card.toss-offen{--rest:470px;}
+.tosspanel .chip.leise{color:var(--ink-3);}
+.swipe-card.toss-offen{transform:translateX(-14px) rotate(-1.2deg);}
+.swipe-card.toss-offen .stamp.toss{opacity:1;}
 .grund{display:flex; gap:7px; align-items:flex-start; margin:10px 2px 0;
   font-size:13.5px; line-height:1.45; color:var(--ink);}
 .grund .i{width:15px; height:15px; flex:none; margin-top:2px; color:var(--accent);}
@@ -233,10 +242,26 @@ label.fld > *{margin-top:6px; font-weight:400; text-transform:none; letter-spaci
 }
 
 /* ---------- Swipe ---------- */
-.swipe{position:relative; margin-bottom:14px;}
+.swipe{position:relative; margin-bottom:10px;}
+/* Heute: Auswahl als zwei Zeilen, die sich seitlich schieben lassen statt umzubrechen */
+.card.wahl{padding:8px 10px; margin-bottom:10px;}
+.chips.zeile{flex-wrap:nowrap; overflow-x:auto; margin:0; padding:2px 0;
+  scrollbar-width:none; -webkit-overflow-scrolling:touch;}
+.chips.zeile::-webkit-scrollbar{display:none;}
+.chips.zeile + .chips.zeile{margin-top:6px;}
+.chips.zeile .chip{flex:none; min-height:30px; padding:5px 11px; font-size:13px;}
+/* Collage so groß, dass Karte und Knöpfe zusammen auf den Bildschirm passen */
+.swipe-card .collage{
+  width:min(100%, max(200px, calc((100svh - var(--rest, 400px) - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * 0.8)));
+  margin:0 auto;
+}
+.swipe-card .teilnamen{margin:8px 2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.swipe-card .grund{margin-top:8px;}
+.swipe-card .grund span{display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
 .swipe-card{
   background:var(--surface); border:1px solid var(--line);
-  border-radius:var(--r-lg); padding:12px; position:relative;
+  border-radius:var(--r-lg); padding:10px; position:relative;
+  transition:transform .2s ease;
   box-shadow:var(--shadow);
   touch-action:pan-y; user-select:none; -webkit-user-select:none; will-change:transform;
 }
@@ -248,9 +273,9 @@ label.fld > *{margin-top:6px; font-weight:400; text-transform:none; letter-spaci
 }
 .stamp.take{left:24px; color:var(--green); border-color:var(--green); transform:rotate(-11deg);}
 .stamp.toss{right:24px; color:var(--red); border-color:var(--red); transform:rotate(11deg);}
-.stamp.skip{left:50%; margin-left:-74px; color:var(--amber); border-color:var(--amber); transform:rotate(-4deg);}
+.stamp.like{left:50%; margin-left:-40px; color:var(--amber); border-color:var(--amber); transform:rotate(-4deg);}
 
-.swipe-actions{display:flex; justify-content:center; gap:22px; margin:2px 0 10px;}
+.swipe-actions{display:flex; justify-content:center; gap:26px; margin:0 0 8px;}
 .act{
   width:60px; height:60px; border-radius:50%;
   border:1px solid var(--line-2); background:var(--surface);
@@ -261,7 +286,7 @@ label.fld > *{margin-top:6px; font-weight:400; text-transform:none; letter-spaci
 .act .i{width:23px; height:23px; stroke-width:1.9;}
 .act span{font-size:9px; font-weight:600; letter-spacing:.02em; color:var(--ink-3);}
 .act.toss{color:var(--red);}
-.act.skip{color:var(--amber);}
+.act.like{color:var(--amber);}
 .act.take{color:var(--green);}
 .act:active{transform:scale(.9);}
 
