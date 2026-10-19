@@ -951,8 +951,41 @@ const SOMMER_NAME = /tank|neckholder|träger|bandeau|bustier|shorts|sandale|flip
 const istSommerteil = it => (it.warmth || 3) <= 1 || SOMMER_NAME.test(it.name || '')
   || (itemSeasons(it).length === 1 && itemSeasons(it)[0] === 'sommer');
 
+const FARBWORT = /weiß|weiss|creme|ecru|beige|sand|greige|taupe|braun|camel|cognac|schoko|mocca|schwarz|grau|anthrazit|silber|gold|rot|bordeaux|weinrot|rosé|rose|rosa|pink|beere|lila|flieder|blau|navy|denim|jeans|türkis|grün|oliv|khaki|salbei|gelb|senf|orange|terracotta|rost|nude|snake|leo|animal/i;
+
+/* Abendteile: Glitzer und Pailletten gehören zum Anlass „Schick", nicht in den
+   Alltag. In den gemerkten Outfits kamen sie nur zu Abendkleidern vor. */
+const GLITZER_NAME = /glitzer|glitter|pailletten|strass|metallic|lurex|lamé/i;
+const istGlitzer = it => GLITZER_NAME.test(it.name || '');
+const SCHICK_ANLASS = 4;
+
+/* Kniehohe Stiefel verschwinden unter der Hose. 73 verworfene, kein gemerktes
+   Outfit mit Stiefel und Hose – zu Rock und Kleid dagegen passen sie. */
+const KNIEHOCH_NAME = /stiefel(?!ette)|cowboy|overknee|reitstiefel/i;
+const istKniehoch = it => it.cat === 'shoes' && KNIEHOCH_NAME.test(it.name || '');
+
+/* Dunkle Grundfarbe eines Teils: Schwarz, Navy oder dunkles Braun.
+   Der Name gilt vor der gemessenen Farbe – die liegt bei Schuhen oft daneben. */
+function dunkleBasis(it) {
+  const n = (it.name || '').toLowerCase();
+  if (/schwarz/.test(n)) return 'schwarz';
+  if (/dunkelblau|navy|marine/.test(n)) return 'navy';
+  if (/hellbraun|mittelbraun|camel|taupe|beige|creme/.test(n)) return null;
+  if (/braun|cognac|schoko|mocca|espresso/.test(n)) return 'braun';
+  if (FARBWORT.test(n)) return null;
+  const c = hexToHSL((it.colors || [])[0]);
+  if (!c) return null;
+  const w = colorWorld(it.colors[0]);
+  if (w === 'neutral' && c.l < 0.16) return 'schwarz';
+  if (w === 'braun' && c.l < 0.3) return 'braun';
+  if (w === 'blau' && c.l < 0.28) return 'navy';
+  return null;
+}
+const basenVon = items => new Set(items.map(dunkleBasis).filter(Boolean));
+
 const poolFor = season => DB.items.filter(it => itemSeasons(it).includes(season) &&
-  (istSportModus() ? (istSport(it) || istSneaker(it)) : !istSport(it)));
+  (istSportModus() ? (istSport(it) || istSneaker(it)) : !istSport(it)) &&
+  (UI.mood === SCHICK_ANLASS || !istGlitzer(it)));
 const trendWorlds = () => new Set(DB.trends.flatMap(t => (t.colors || []).map(colorWorld))
   .filter(w => w !== 'neutral'));
 /* Wärme: Schuhe zählen mit – sonst landen Sandalen unter dem Wollmantel */
@@ -1060,6 +1093,19 @@ const sportRein = items => {
   return kleidung.every(istSport) || !kleidung.some(istSport);
 };
 
+/* Drei dunkle Grundfarben – Navy, Braun und Schwarz – wirken zusammen unruhig.
+   Kam in keinem gemerkten Outfit vor, in 48 verworfenen. Zwei davon gehen, wenn
+   es bewusst aussieht; das bewertet das Lernen weiter unten. */
+const basenOk = items => basenVon(items).size <= 2;
+
+const stiefelOk = items => !items.some(istKniehoch) ||
+  !items.some(i => i.cat === 'pants' && !(ki(i) && ki(i).silhouette === 'schmal'));
+
+/* Glitzer nur zu schicken Teilen – der Glitzerpumps zur Jeans war der Fehlgriff */
+const glitzerOk = items => !items.some(istGlitzer) ||
+  items.filter(i => ['base_top', 'base_bottom', 'base_full'].includes(CATS[i.cat].role) && !istGlitzer(i))
+    .every(i => (i.formality || 3) >= 4);
+
 /* Harte Regeln: Farbwelten, Stilbruch, Jahreszeit, Silhouette, Wärme, Sport */
 function validOutfit(items, season) {
   if (outfitWorlds(items).length > MAX_WORLDS) return false;
@@ -1069,14 +1115,96 @@ function validOutfit(items, season) {
   if (!waermeStimmig(items)) return false;
   if (!sportRein(items)) return false;
   if (!stileVertraeglich(items)) return false;
+  if (!basenOk(items) || !stiefelOk(items) || !glitzerOk(items)) return false;
+  if (gelerntGesperrt(items)) return false;
   return true;
+}
+
+/* ================= Lernen aus Take und Toss =================
+   Vorher wurde ein verworfenes Outfit nur genau so gesperrt – das nächste mit
+   denselben Schwächen kam trotzdem. Jetzt zählt die App für eine Reihe
+   verständlicher Merkmale, wie oft sie in verworfenen und wie oft in gemerkten
+   Outfits vorkommen. Was deutlich öfter verworfen wird, bekommt Abzug; was nie
+   gemerkt, aber oft verworfen wurde, wird gesperrt. Dieselben Erkenntnisse gehen
+   als Sätze an die Stylistin. */
+const kernTeile = items => items.filter(i => ['base_top', 'base_bottom', 'base_full'].includes(CATS[i.cat].role));
+const MUSTER_NAME = /leo|animal|zebra|snake|karo|kariert|streif|gestreift|blumen|floral|paisley|gepunktet|print/i;
+const lautesMuster = it => lautVon(it) >= 1 || MUSTER_NAME.test(it.name || '');
+const farbFamilie = it => {
+  const b = dunkleBasis(it);
+  if (b) return b;
+  const n = (it.name || '').toLowerCase();
+  if (/camel|taupe|cognac|hellbraun|mittelbraun|braun/.test(n)) return 'braun';
+  if (/creme|weiß|weiss|ecru|beige|sand|offwhite/.test(n)) return 'hell';
+  return null;
+};
+
+const MERKMALE = [
+  { key: 'schwarzBraun', text: 'Schwarz und dunkles Braun im selben Outfit',
+    test: it => { const b = basenVon(it); return b.has('schwarz') && b.has('braun'); } },
+  { key: 'navySchwarz', text: 'Navy zusammen mit Schwarz',
+    test: it => { const b = basenVon(it); return b.has('navy') && b.has('schwarz'); } },
+  { key: 'navyBraun', text: 'Navy zusammen mit dunklem Braun',
+    test: it => { const b = basenVon(it); return b.has('navy') && b.has('braun'); } },
+  { key: 'schuhTasche', text: 'Schuhe und Tasche in verschiedenen Farbfamilien',
+    test: it => {
+      const s = it.find(i => i.cat === 'shoes'), t = it.find(i => i.cat === 'bag');
+      const a = s && farbFamilie(s), b = t && farbFamilie(t);
+      return !!(a && b && a !== b);
+    } },
+  { key: 'formSpanne', text: 'sehr schicke neben sehr legeren Teilen',
+    test: it => { const f = it.filter(i => !['bag', 'acc'].includes(CATS[i.cat].role)).map(i => i.formality || 3);
+      return f.length > 1 && Math.max(...f) - Math.min(...f) >= 2; } },
+  { key: 'sneakerSchick', text: 'Sneaker zu schicken Teilen',
+    test: it => it.some(istSneaker) && kernTeile(it).some(i => (i.formality || 3) >= 4) },
+  { key: 'zweiMuster', text: 'zwei auffällige Muster in einem Outfit',
+    test: it => it.filter(lautesMuster).length >= 2 }
+];
+
+/* Begründungen aus dem Toss-Dialog, Schlüssel → Text für die Stylistin */
+const TOSS_GRUENDE = [
+  ['farben', 'Farben'], ['schuhe', 'Schuhe'], ['zuschick', 'Zu schick'],
+  ['zuleger', 'Zu leger'], ['stil', 'Stilbruch'], ['saison', 'Jahreszeit']
+];
+
+let _lernen = null, _lernenStand = '';
+function lernstand() {
+  const alleToss = [...new Set([...(DB.tossArchiv || []), ...(DB.tossed || [])])];
+  const stand = alleToss.length + '|' + (DB.outfits || []).length + '|' + DB.items.length;
+  if (_lernen && _lernenStand === stand) return _lernen;
+  const zuItems = ids => ids.map(itemById).filter(Boolean);
+  const verworfen = alleToss.map(k => zuItems(k.split('|'))).filter(x => x.length >= 2);
+  const gemerkt = (DB.outfits || []).map(o => zuItems(o.ids)).filter(x => x.length >= 2);
+  const T = verworfen.length, S = gemerkt.length;
+  const merkmale = MERKMALE.map(m => {
+    const t = verworfen.filter(m.test).length, g = gemerkt.filter(m.test).length;
+    /* Verhältnis der Anteile, geglättet – bei wenigen Daten bleibt es nahe 1 */
+    const verh = ((t + 1) / (T + 2)) / ((g + 1) / (S + 2));
+    return { ...m, t, g, verh,
+      sperre: T >= 30 && S >= 10 && g === 0 && t >= 15,
+      abzug: T >= 20 && t >= 8 ? clamp(Math.log(verh), 0, 2.5) * 22 : 0 };
+  });
+  _lernen = { T, S, merkmale };
+  _lernenStand = stand;
+  return _lernen;
+}
+const gelerntGesperrt = items => lernstand().merkmale.some(m => m.sperre && m.test(items));
+const gelerntAbzug = items => lernstand().merkmale.reduce((s, m) => s + (m.abzug && m.test(items) ? m.abzug : 0), 0);
+
+/* Für die Stylistin in Worte gefasst */
+function gelernteSaetze() {
+  const l = lernstand();
+  const pz = (a, b) => Math.round(a * 100 / Math.max(1, b));
+  return l.merkmale.filter(m => m.sperre || m.abzug >= 8).map(m => m.sperre
+    ? `Nie: ${m.text} (${m.t}-mal verworfen, nie gemerkt).`
+    : `Möglichst nicht: ${m.text} (in ${pz(m.t, l.T)} % der verworfenen, nur ${pz(m.g, l.S)} % der gemerkten Outfits).`);
 }
 
 function scoreOutfit(items, opts) {
   const worlds = outfitWorlds(items);
   const f = items.map(i => i.formality || 3);
   const hit = worlds.filter(w => opts.trends.has(w)).length;
-  let s = 100;
+  let s = 100 - gelerntAbzug(items);
   s -= worlds.length * 5;
   s -= (Math.max(...f) - Math.min(...f)) * 9;
   s -= Math.abs(avg(f) - opts.formality) * 7;
@@ -1369,7 +1497,7 @@ function kiUebernehmen(item, a) {
 }
 
 /* Pins fürs Stilprofil: klein reicht, Gemini sieht die Komposition, nicht Details */
-async function pinFuerProfil(picId, max = 384) {
+async function pinFuerProfil(picId, max = 512) {
   const blob = await picGet(picId);
   if (!blob) return null;
   const url = URL.createObjectURL(blob);
@@ -1383,7 +1511,7 @@ async function pinFuerProfil(picId, max = 384) {
   return (await blobToDataURL(await canvasToBlob(cv, 'image/jpeg', 0.8))).split(',')[1];
 }
 
-const PROFIL_PINS = 12;   /* mehr bringt kaum Erkenntnis, kostet aber Tokens */
+const PROFIL_PINS = 16;   /* eine Abfrage – mehr Pins kosten nur Tokens, kein Kontingent */
 
 async function kiStilprofil() {
   const basis = dienstUrl();
@@ -1403,7 +1531,8 @@ async function kiStilprofil() {
     stil: (p.stil || []).filter(t => STILE.includes(t)),
     silhouetten: (p.silhouetten || []).filter(t => SILHOUETTEN[t]),
     materialien: (p.materialien || []).filter(t => MATERIALIEN[t]),
-    farbregeln: String(p.farbregeln || '').slice(0, 400),
+    farbregeln: String(p.farbregeln || '').slice(0, 500),
+    stylingregeln: (p.stylingregeln || []).slice(0, 8).map(t => String(t).slice(0, 160)),
     vermeiden: (p.vermeiden || []).slice(0, 6).map(t => String(t).slice(0, 120)),
     pins: bilder.length,
     erstellt: todayISO()
@@ -1447,8 +1576,6 @@ function farbName(hex) {
   return c.s > 0.12 && c.h >= 8 && c.h <= 60 ? 'Beige/Sand' : 'Grau';
 }
 
-const FARBWORT = /weiß|weiss|creme|ecru|beige|sand|greige|taupe|braun|camel|cognac|schoko|mocca|schwarz|grau|anthrazit|silber|gold|rot|bordeaux|weinrot|rosé|rose|rosa|pink|beere|lila|flieder|blau|navy|denim|jeans|türkis|grün|oliv|khaki|salbei|gelb|senf|orange|terracotta|rost|nude|snake|leo|animal/i;
-
 /* Eine Zeile je Teil: alles, was eine Stylistin wissen muss, ohne Bild */
 function stylistZeile(it) {
   const k = it.ki || {};
@@ -1468,6 +1595,8 @@ function stylistZeile(it) {
   if ((k.stil || []).length) t.push('Stil ' + k.stil.join('/'));
   t.push(`Wärme ${it.warmth || 3}/5`, `Formalität ${it.formality || 3}/5`);
   if (istSport(it)) t.push('Sportbekleidung');
+  if (istGlitzer(it)) t.push('Abendteil');
+  if (istKniehoch(it)) t.push('kniehoch');
   return t.join(', ');
 }
 
@@ -1490,8 +1619,15 @@ async function kiStylist(season, mood) {
   /* Gemerkte und verworfene Outfits als Beispiele – nur solche, deren Teile
      alle in der Liste stehen, sonst kann die Stylistin nichts damit anfangen */
   const alsCodes = ids => ids.length && ids.every(id => code.has(id)) ? ids.map(id => code.get(id)) : null;
-  const gemocht = (DB.outfits || []).map(o => alsCodes(o.ids)).filter(Boolean).slice(-15);
-  const verworfen = (DB.tossed || []).map(k => alsCodes(k.split('|'))).filter(Boolean).slice(-15);
+  const gemocht = (DB.outfits || []).map(o => alsCodes(o.ids)).filter(Boolean).slice(-20);
+  /* Begründete Ablehnungen zuerst – aus denen lässt sich am meisten lernen */
+  const gruende = DB.tossGruende || {};
+  const grundText = k => (TOSS_GRUENDE.find(g => g[0] === gruende[k]) || [])[1] || '';
+  const tossKeys = [...(DB.tossed || [])].reverse();
+  const verworfen = [...tossKeys.filter(k => gruende[k]), ...tossKeys.filter(k => !gruende[k])]
+    .map(k => ({ teile: alsCodes(k.split('|')), grund: grundText(k) }))
+    .filter(v => v.teile).slice(0, 25);
+  const p = DB.profil;
   const res = await fetch(basis + '/stylist', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1499,7 +1635,10 @@ async function kiStylist(season, mood) {
       anlass: ANLASS_TEXT[mood] || ANLASS_TEXT[3],
       anzahl: STYLIST_ANZAHL,
       teile: pool.map(it => ({ k: code.get(it.id), t: stylistZeile(it) })),
-      profil: DB.profil ? { aesthetik: DB.profil.aesthetik, vermeiden: DB.profil.vermeiden || [] } : null,
+      profil: p ? { aesthetik: p.aesthetik, farbregeln: p.farbregeln, vermeiden: p.vermeiden || [],
+        stylingregeln: p.stylingregeln || [],
+        stil: p.stil || [], silhouetten: p.silhouetten || [], materialien: p.materialien || [] } : null,
+      regeln: gelernteSaetze(),
       gemocht, verworfen
     })
   });
@@ -1622,7 +1761,7 @@ function renderToday() {
       <p class="hint">Sie geht deinen Schrank für ${saisonLbl} durch. Das dauert ein paar Sekunden.</p>
       <button class="btn small" onclick="App.stylistNichtWarten()">Nicht warten</button>
     </div>`
-  : c ? swipeHTML(c) + stylistFussHTML()
+  : c ? tossFrageHTML() + swipeHTML(c) + stylistFussHTML()
   : (() => {
       const luecke = poolLuecke(UI.season);
       const sport = istSportModus();
@@ -1645,6 +1784,16 @@ function renderToday() {
       ${geht && dienstUrl() && !stylistLaeuft ? `<button class="btn block" onclick="App.stylistNeu()">${ico('sparkle')} Neue Ideen der Stylistin</button>` : ''}
       ${geht && (DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen (${DB.tossed.length})</button>` : ''}
     </div>`; })()}`;
+}
+
+/* Nach einem Toss: woran lag's? Ein Tipp genügt, Überspringen geht durch
+   einfaches Weiterwischen. Aus einem Grund lernt die Stylistin viel mehr als
+   aus einer bloßen Ablehnung. */
+function tossFrageHTML() {
+  if (!UI.letzterToss) return '';
+  return `<div class="tossfrage"><span class="small">Was hat nicht gepasst?</span>
+    <div class="chips">${TOSS_GRUENDE.map(([k, l]) =>
+      `<button class="chip" onclick="App.tossGrund('${k}')">${l}</button>`).join('')}</div></div>`;
 }
 
 /* Unter der Karte: woher der Vorschlag kommt – und die Möglichkeit, neue
@@ -2003,6 +2152,9 @@ function renderTrends() {
         ${liste('Silhouetten', p.silhouetten, SILHOUETTEN)}
         ${liste('Materialien', p.materialien, MATERIALIEN)}
         ${p.farbregeln ? `<h3>Farben</h3><p class="small">${esc(p.farbregeln)}</p>` : ''}
+        ${p.stylingregeln && p.stylingregeln.length ? `<h3>So kombinierst du</h3>
+          <ul class="small" style="margin:0 0 10px; padding-left:18px">
+            ${p.stylingregeln.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : ''}
         ${p.vermeiden && p.vermeiden.length ? `<h3>Vermeiden</h3>
           <ul class="small" style="margin:0 0 10px; padding-left:18px">
             ${p.vermeiden.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : ''}
@@ -2340,6 +2492,8 @@ App.decide = what => {
   const c = UI.queue && UI.queue[0];
   if (!c) return;
   const key = outfitKey(c.ids);
+  /* Grund nur für das gerade verworfene Outfit anbieten, danach verschwindet die Frage */
+  UI.letzterToss = what === 'toss' ? key : null;
   if (what === 'take') {
     if (!DB.outfits.some(o => outfitKey(o.ids) === key)) {
       DB.outfits.push({ id: uid(), date: todayISO(), ids: [...c.ids], liked: true,
@@ -2366,11 +2520,22 @@ App.decide = what => {
   setTimeout(render, 230);
 };
 App.stylistNeu = () => stylistHolen(true);
+App.tossGrund = g => {
+  if (!UI.letzterToss) return;
+  DB.tossGruende = DB.tossGruende || {};
+  DB.tossGruende[UI.letzterToss] = g;
+  UI.letzterToss = null;
+  save();
+  toast('Danke – fließt in die nächsten Vorschläge ein');
+  render();
+};
 /* Wer nicht warten will, bekommt sofort die lokale Auswahl; die Ergebnisse
    der Stylistin rücken nach, sobald sie da sind. */
 App.stylistNichtWarten = () => { UI.ohneStylist = stylistSchluessel(); UI.queue = null; render(); };
 App.resetTossed = () => {
   if (!confirm('Alle verworfenen Kombinationen wieder zulassen?')) return;
+  /* Wieder zulassen heißt nicht vergessen: fürs Lernen bleiben sie im Archiv */
+  DB.tossArchiv = [...new Set([...(DB.tossArchiv || []), ...(DB.tossed || [])])].slice(-3000);
   DB.tossed = [];
   save();
   UI.queue = null;
@@ -3035,6 +3200,8 @@ function zusammenfuehren(inc) {
   }
 
   DB.tossed = [...new Set([...(DB.tossed || []), ...(inc.tossed || [])])];
+  DB.tossGruende = { ...(inc.tossGruende || {}), ...(DB.tossGruende || {}) };
+  DB.tossArchiv = [...new Set([...(DB.tossArchiv || []), ...(inc.tossArchiv || [])])].slice(-3000);
 
   if (inc.profil && (!DB.profil || (inc.profil.erstellt || '') > (DB.profil.erstellt || ''))) {
     DB.profil = inc.profil; profil = true;
