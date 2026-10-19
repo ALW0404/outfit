@@ -301,7 +301,7 @@ try { Object.assign(UI, JSON.parse(localStorage.getItem(LS_UI) || '{}')); } catc
 /* Gespeicherte Auswahl gegen die aktuellen Listen prüfen: ändert sich ein Schlüssel,
    zeigt die App sonst stillschweigend eine leere Liste an. */
 if (UI.outTagFilter !== 'all' && !OUTFIT_TAGS.some(t => t.key === UI.outTagFilter)) UI.outTagFilter = 'all';
-if (UI.closetFilter !== 'all' && !CATS[UI.closetFilter]) UI.closetFilter = 'all';
+if (UI.closetFilter !== 'all' && UI.closetFilter !== '_ohneki' && !CATS[UI.closetFilter]) UI.closetFilter = 'all';
 if (!SEASONS.some(s => s.key === UI.season)) UI.season = seasonNow();
 if (!['neu', 'saison'].includes(UI.outSort)) UI.outSort = 'neu';
 if (typeof UI.trendGewicht !== 'number') UI.trendGewicht = 0.5;
@@ -1203,8 +1203,28 @@ async function kiAnalyseMehrere(items) {
   if (res.status === 404) { const e = new Error('Sammelabfrage nicht unterstützt'); e.alt = true; throw e; }
   const daten = await antwortLesen(res);
   const liste = Array.isArray(daten.teile) ? daten.teile : [];
-  /* Über den Index zuordnen, nicht über die Reihenfolge – das Modell kann umsortieren */
-  return items.map((it, i) => ({ item: it, a: liste.find(x => x.index === i) || null }));
+  return zuordnen(items, liste);
+}
+
+/* Zuordnung der Ergebnisse zu den Teilen.
+
+   Modelle halten sich nicht zuverlässig an „ab 0 nummerieren": manche zählen ab 1,
+   manche lassen den Index weg. Vorher fiel dadurch je Paket ein Teil stillschweigend
+   heraus — der Grund, warum nach zwei Paketen nur 15 statt 24 Teile analysiert waren. */
+function zuordnen(items, liste) {
+  const indizes = liste.map(x => x && x.index).filter(v => Number.isInteger(v));
+  const brauchbar = indizes.length === liste.length && new Set(indizes).size === liste.length;
+  let versatz = 0;
+  if (brauchbar && indizes.length) {
+    const min = Math.min(...indizes), max = Math.max(...indizes);
+    if (min === 1 && max === items.length) versatz = 1;        /* ab 1 gezählt */
+    else if (min !== 0 || max !== items.length - 1) versatz = min;
+  }
+  return items.map((it, i) => ({
+    item: it,
+    a: brauchbar ? (liste.find(x => x.index - versatz === i) || null)
+                 : (liste[i] || null)                          /* sonst der Reihe nach */
+  }));
 }
 
 /* Übernimmt das Ergebnis. Wärme, Anlass und Jahreszeiten werden nur gesetzt,
@@ -1431,7 +1451,9 @@ function renderCatSorter() {
 
 function renderCloset() {
   const f = UI.closetFilter;
-  const list = f === 'all' ? DB.items : DB.items.filter(i => i.cat === f);
+  const list = f === 'all' ? DB.items
+    : f === '_ohneki' ? DB.items.filter(i => !istAnalysiert(i))
+    : DB.items.filter(i => i.cat === f);
   const sorted = [...list].sort((a, b) =>
     CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (b.addedAt || 0) - (a.addedAt || 0));
   const counts = c => DB.items.filter(i => i.cat === c).length;
@@ -1461,6 +1483,9 @@ function renderCloset() {
   <div class="card">
     <div class="chips">
       <button class="chip ${f === 'all' ? 'active' : ''}" onclick="App.filterCloset('all')">Alle ${DB.items.length}</button>
+      ${(() => { const n = DB.items.filter(i => !istAnalysiert(i)).length;
+        return n && n < DB.items.length
+          ? `<button class="chip ${f === '_ohneki' ? 'active' : ''}" onclick="App.filterCloset('_ohneki')">ohne KI ${n}</button>` : ''; })()}
       ${CAT_ORDER.filter(c => counts(c)).map(c =>
         `<button class="chip ${f === c ? 'active' : ''}" onclick="App.filterCloset('${c}')">${CATS[c].kurz} ${counts(c)}</button>`).join('')}
     </div>
@@ -2518,7 +2543,15 @@ App.analyseAlle = async () => {
     sag(`${fertig} von ${offen.length} · noch etwa ${restMin} Min.`);
     try {
       if (sammeln) {
-        for (const { item, a } of await kiAnalyseMehrere(paket)) if (a) { kiUebernehmen(item, a); fertig++; }
+        const erg = await kiAnalyseMehrere(paket);
+        let imPaket = 0;
+        for (const { item, a } of erg) if (a) { kiUebernehmen(item, a); fertig++; imPaket++; }
+        /* Unvollständige Pakete sichtbar machen statt sie zu verschlucken.
+           Die fehlenden Teile bleiben unanalysiert und kommen beim nächsten Lauf dran. */
+        if (imPaket < paket.length) {
+          sag(`${fertig} von ${offen.length} · Achtung: Paket lieferte nur ${imPaket} von ${paket.length}`);
+          await new Promise(r => setTimeout(r, 1500));
+        }
       } else {
         for (const it of paket) { kiUebernehmen(it, await kiAnalyse(it)); fertig++;
           await new Promise(r => setTimeout(r, KI_PAUSE_MS)); }
