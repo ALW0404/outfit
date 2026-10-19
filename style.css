@@ -209,6 +209,19 @@ label.fld > *{margin-top:6px; font-weight:400; text-transform:none; letter-spaci
 .osticker .i{width:13px; height:13px;}
 .collage.klein .osticker{top:5px; right:5px; padding:3px 7px; font-size:11px;}
 
+/* ---------- KI-Stylistin ---------- */
+.grund{display:flex; gap:7px; align-items:flex-start; margin:10px 2px 0;
+  font-size:13.5px; line-height:1.45; color:var(--ink);}
+.grund .i{width:15px; height:15px; flex:none; margin-top:2px; color:var(--accent);}
+.stylist-laedt{display:flex; flex-direction:column; align-items:center; text-align:center;
+  gap:10px; padding:34px 18px;}
+.stylist-laedt h2{margin:4px 0 0;}
+.stylist-laedt .hint{margin:0;}
+.stylist-fuss{margin-top:4px;}
+.linkbtn{background:none; border:0; padding:4px 2px; font:inherit; font-weight:600;
+  color:var(--accent); display:inline-flex; gap:5px; align-items:center; cursor:pointer;}
+.linkbtn .i{width:14px; height:14px;}
+
 .worldtags{display:inline-flex; gap:5px; flex-wrap:wrap;}
 .wtag{
   background:var(--surface-2); color:var(--ink-2);

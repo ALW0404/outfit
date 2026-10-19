@@ -933,7 +933,26 @@ function collageHTML(items, opt = {}) {
 /* Jahreszeit ist eine harte Bedingung. Teile ohne gepflegte Angabe werden aus der
    Wärme abgeleitet, damit sie nicht stillschweigend in jeder Jahreszeit auftauchen. */
 const itemSeasons = it => (it.seasons && it.seasons.length) ? it.seasons : seasonsFromWarmth(it.warmth || 3);
-const poolFor = season => DB.items.filter(it => itemSeasons(it).includes(season));
+/* Sportbekleidung war für die Engine bisher eine ganz normale Hose mit Anlass 2 –
+   und damit kombinierbar mit Cowboy Boots. Sie bekommt einen eigenen Anlass und
+   taucht in Leger/Normal/Schick nicht mehr auf. Erkennung: eigene Markierung am
+   Teil, sonst KI-Analyse, sonst der Name. */
+const SPORT_NAME = /(^|[\s-])(sport|yoga|pilates|gym|fitness|training|jogging|running)|legging/i;
+const SNEAKER_NAME = /sneaker|turnschuh|laufschuh|new balance|adidas|nike|asics|puma|reebok|vans|converse|hoka|salomon|on running/i;
+const istSport = it => it.sport === true || (it.sport !== false &&
+  ((it.ki && it.ki.sportbekleidung === true) || SPORT_NAME.test(it.name || '')));
+const istSneaker = it => it.cat === 'shoes' && (istSport(it) || SNEAKER_NAME.test(it.name || ''));
+const SPORT_ANLASS = 1;
+const istSportModus = () => UI.mood === SPORT_ANLASS;
+
+/* Sommerteile: neben ihnen ist nichts Warmes stimmig, auch wenn jedes Teil für
+   sich zur gewählten Jahreszeit passt. */
+const SOMMER_NAME = /tank|neckholder|träger|bandeau|bustier|shorts|sandale|flip|pantolette|bikini|badeanzug|leinen/i;
+const istSommerteil = it => (it.warmth || 3) <= 1 || SOMMER_NAME.test(it.name || '')
+  || (itemSeasons(it).length === 1 && itemSeasons(it)[0] === 'sommer');
+
+const poolFor = season => DB.items.filter(it => itemSeasons(it).includes(season) &&
+  (istSportModus() ? (istSport(it) || istSneaker(it)) : !istSport(it)));
 const trendWorlds = () => new Set(DB.trends.flatMap(t => (t.colors || []).map(colorWorld))
   .filter(w => w !== 'neutral'));
 /* Wärme: Schuhe zählen mit – sonst landen Sandalen unter dem Wollmantel */
@@ -1010,12 +1029,46 @@ function volumenPasst(items) {
   return volumenVon(oben) + volumenVon(unten) <= 3;
 }
 
-/* Harte Regeln: Farbwelten, Stilbruch, Jahreszeit, Silhouette */
+/* Wärme muss im Outfit stimmig sein, nicht nur jedes Teil für sich.
+   Vorher durfte eine Jacke beliebig warm sein („das ist ihr Zweck") – so kam
+   ein Wollmantel auf ein Outfit mit Shorts und Sandalen. */
+function waermeStimmig(items) {
+  const lagen = items.filter(i => CATS[i.cat].role === 'layer');
+  const rest = items.filter(i => ['base_top', 'base_bottom', 'base_full', 'shoes'].includes(CATS[i.cat].role));
+  if (!rest.length) return true;
+  const w = rest.map(i => i.warmth || 3);
+  const minW = Math.min(...w), maxW = Math.max(...w);
+  if (rest.some(istSommerteil) && (maxW >= 4 || lagen.some(l => (l.warmth || 3) >= 3))) return false;
+  if (lagen.some(l => (l.warmth || 3) - minW > 2)) return false;
+  if (maxW - minW > 2) return false;
+  return true;
+}
+
+/* Wenige, eindeutige Stilbrüche – nur für analysierte Teile. Mehr lässt sich mit
+   festen Regeln nicht sauber fassen; den Rest beurteilt die KI-Stylistin. */
+const STIL_KONFLIKT = [['sportlich', 'elegant']];
+function stileVertraeglich(items) {
+  const an = items.filter(istAnalysiert);
+  return STIL_KONFLIKT.every(([x, y]) => !(
+    an.some(i => stileVon(i).includes(x) && !stileVon(i).includes(y)) &&
+    an.some(i => stileVon(i).includes(y) && !stileVon(i).includes(x))));
+}
+
+/* Sport nur mit Sport – kein Yoga-Oberteil unter der Teddyweste */
+const sportRein = items => {
+  const kleidung = items.filter(i => i.cat !== 'shoes');
+  return kleidung.every(istSport) || !kleidung.some(istSport);
+};
+
+/* Harte Regeln: Farbwelten, Stilbruch, Jahreszeit, Silhouette, Wärme, Sport */
 function validOutfit(items, season) {
   if (outfitWorlds(items).length > MAX_WORLDS) return false;
   if (!formalityFits(items)) return false;
   if (season && !warmthFits(items, season)) return false;
   if (!volumenPasst(items)) return false;
+  if (!waermeStimmig(items)) return false;
+  if (!sportRein(items)) return false;
+  if (!stileVertraeglich(items)) return false;
   return true;
 }
 
@@ -1126,12 +1179,31 @@ function suggest(n = 12, vorbelegt) {
   cands.sort((a, b) => b.score - a.score);
   return diversify(cands, n, vorbelegt);
 }
-/* Nachfüllen, solange noch etwas Ungesehenes übrig ist */
+/* Nachfüllen, solange noch etwas Ungesehenes übrig ist.
+   Zuerst kommen die Outfits der KI-Stylistin, danach die lokale Auswahl.
+   Solange die Stylistin noch arbeitet, wird nicht lokal aufgefüllt – sonst
+   swipt man schon schwächere Vorschläge weg, bevor die guten da sind. */
 function ensureQueue() {
   if (!UI.queue) UI.queue = [];
   if (UI.queue.length >= 3) return;
   const da = new Set(UI.queue.map(q => outfitKey(q.ids)));
+  stylistOffen().forEach(c => {
+    const k = outfitKey(c.ids);
+    if (!da.has(k)) { UI.queue.push({ ids: [...c.ids], grund: c.grund, ki: true }); da.add(k); }
+  });
+  if (UI.queue.length >= 3 || stylistWartet()) return;
   suggest(12, UI.queue).forEach(c => { if (!da.has(outfitKey(c.ids))) UI.queue.push(c); });
+}
+
+/* Gibt es mit diesem Schrank überhaupt ein gültiges Outfit? Unterscheidet
+   „alles schon gesehen" von „hier passt nichts zusammen". */
+function kombinierbar(season) {
+  const pool = poolFor(season);
+  for (let i = 0; i < 600; i++) {
+    const o = drawOutfit(pool, { season });
+    if (o && validOutfit(o, season)) return true;
+  }
+  return false;
 }
 
 /* Technische Fehler in eine Sprache übersetzen, die in einer App etwas zu
@@ -1282,6 +1354,7 @@ function kiUebernehmen(item, a) {
     muster:     MUSTER[a.muster]          ? a.muster     : 'uni',
     stil: Array.isArray(a.stil) ? a.stil.filter(t => STILE.includes(t)).slice(0, 3) : [],
     farbe: typeof a.farbe === 'string' ? a.farbe.slice(0, 40) : '',
+    sportbekleidung: a.sportbekleidung === true,
     analysiert: Date.now()
   };
   const ungeprueft = !!item.seasonsAuto;
@@ -1337,6 +1410,166 @@ async function kiStilprofil() {
   };
 }
 
+/* ================= KI-Stylistin =================
+   Feste Regeln erkennen grobe Fehler – Sommertop unter Wollmantel, Leggings zu
+   Cowboy Boots –, aber keinen Stil. Ob Silhouetten, Materialien und Farben
+   wirklich zusammen gut aussehen, beurteilt die Stylistin: Sie bekommt den
+   Schrank als kurze Textliste und stellt in **einer** Abfrage 15 Outfits zusammen.
+
+   Die Regeln bleiben als Sicherheitsnetz: Was die Stylistin vorschlägt, muss
+   validOutfit bestehen. Fällt der Dienst aus, läuft die lokale Auswahl weiter.
+
+   Die Ergebnisse liegen in einem eigenen Speicher, nicht in DB – sie sind
+   jederzeit neu erzeugbar und gehören nicht ins Backup. */
+const LS_STYLIST = 'outfit-stylist';
+let STYLIST = {};
+try { STYLIST = JSON.parse(localStorage.getItem(LS_STYLIST) || '{}') || {}; } catch (e) {}
+const stylistSpeichern = () => { try { localStorage.setItem(LS_STYLIST, JSON.stringify(STYLIST)); } catch (e) {} };
+
+const STYLIST_ANZAHL = 15;
+const STYLIST_PAUSE_MS = 30 * 60 * 1000;   /* nach einem Fehler nicht sofort wieder anfragen */
+const ANLASS_TEXT = {
+  2: 'Freizeit, entspannt und leger',
+  3: 'Alltag – Stadt, Büro ohne Dresscode, Treffen mit Freunden',
+  4: 'schick – Abendessen, Verabredung, Büro mit Anspruch',
+  [SPORT_ANLASS]: 'Sport – Pilates, Yoga, Gym'
+};
+const stylistSchluessel = () => UI.season + '|' + UI.mood;
+let stylistLaeuft = null;          /* Schlüssel der laufenden Abfrage */
+
+function farbName(hex) {
+  const w = colorWorld(hex);
+  if (w !== 'neutral') return WORLD_LBL[w];
+  const c = hexToHSL(hex);
+  if (!c) return '';
+  if (c.l > 0.8) return 'Weiß/Creme';
+  if (c.l < 0.2) return 'Schwarz';
+  return c.s > 0.12 && c.h >= 8 && c.h <= 60 ? 'Beige/Sand' : 'Grau';
+}
+
+const FARBWORT = /weiß|weiss|creme|ecru|beige|sand|greige|taupe|braun|camel|cognac|schoko|mocca|schwarz|grau|anthrazit|silber|gold|rot|bordeaux|weinrot|rosé|rose|rosa|pink|beere|lila|flieder|blau|navy|denim|jeans|türkis|grün|oliv|khaki|salbei|gelb|senf|orange|terracotta|rost|nude|snake|leo|animal/i;
+
+/* Eine Zeile je Teil: alles, was eine Stylistin wissen muss, ohne Bild */
+function stylistZeile(it) {
+  const k = it.ki || {};
+  const t = [CATS[it.cat].label];
+  if (it.name) t.push(it.name);
+  /* Die aus dem Foto gemessene Farbe ist unzuverlässig (Schatten, Hintergrund):
+     eine braune Ballerina kam als „Schwarz/Grau" an. Steht die Farbe schon im
+     Namen, gilt der Name; sonst nur der Hauptton als ungefähre Angabe. */
+  if (typeof k.farbe === 'string' && k.farbe) t.push('Farbe ' + k.farbe);
+  else if (!FARBWORT.test(it.name || '') && (it.colors || []).length) {
+    const f = farbName(it.colors[0]);
+    if (f) t.push('Farbe etwa ' + f);
+  }
+  if (SILHOUETTEN[k.silhouette]) t.push(SILHOUETTEN[k.silhouette].label.toLowerCase());
+  if (MATERIALIEN[k.material]) t.push(MATERIALIEN[k.material].label);
+  if (MUSTER[k.muster] && k.muster !== 'uni') t.push(MUSTER[k.muster].label.toLowerCase());
+  if ((k.stil || []).length) t.push('Stil ' + k.stil.join('/'));
+  t.push(`Wärme ${it.warmth || 3}/5`, `Formalität ${it.formality || 3}/5`);
+  if (istSport(it)) t.push('Sportbekleidung');
+  return t.join(', ');
+}
+
+/* Aufbau prüfen, den die Stylistin einhalten soll – das Modell hält sich
+   meistens daran, aber nicht immer. */
+function aufbauOk(items) {
+  if (new Set(items.map(i => i.id)).size !== items.length) return false;
+  const n = r => items.filter(i => CATS[i.cat].role === r).length;
+  const kleid = n('base_full'), oben = n('base_top'), unten = n('base_bottom');
+  const kern = (kleid === 1 && !oben && !unten) || (!kleid && oben === 1 && unten === 1);
+  return kern && n('shoes') === 1 && n('layer') <= 1 && n('bag') <= 1 && n('acc') <= 2;
+}
+
+async function kiStylist(season, mood) {
+  const basis = dienstUrl();
+  if (!basis) throw new Error('Kein KI-Dienst eingerichtet');
+  const pool = poolFor(season).slice(0, 220);
+  const code = new Map(), zurueck = new Map();
+  pool.forEach((it, i) => { code.set(it.id, 'T' + (i + 1)); zurueck.set('T' + (i + 1), it); });
+  /* Gemerkte und verworfene Outfits als Beispiele – nur solche, deren Teile
+     alle in der Liste stehen, sonst kann die Stylistin nichts damit anfangen */
+  const alsCodes = ids => ids.length && ids.every(id => code.has(id)) ? ids.map(id => code.get(id)) : null;
+  const gemocht = (DB.outfits || []).map(o => alsCodes(o.ids)).filter(Boolean).slice(-15);
+  const verworfen = (DB.tossed || []).map(k => alsCodes(k.split('|'))).filter(Boolean).slice(-15);
+  const res = await fetch(basis + '/stylist', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      saison: SEASONS.find(x => x.key === season).label,
+      anlass: ANLASS_TEXT[mood] || ANLASS_TEXT[3],
+      anzahl: STYLIST_ANZAHL,
+      teile: pool.map(it => ({ k: code.get(it.id), t: stylistZeile(it) })),
+      profil: DB.profil ? { aesthetik: DB.profil.aesthetik, vermeiden: DB.profil.vermeiden || [] } : null,
+      gemocht, verworfen
+    })
+  });
+  const j = await antwortLesen(res);
+  const outfits = [], gesehen = new Set();
+  let aussortiert = 0;
+  for (const o of (j.outfits || [])) {
+    const items = (o.teile || []).map(c => zurueck.get(String(c).trim().toUpperCase()));
+    if (!items.length || items.some(x => !x) || !aufbauOk(items) || !validOutfit(items, season)) {
+      aussortiert++;
+      continue;
+    }
+    const ids = items.map(x => x.id);
+    const key = outfitKey(ids);
+    if (gesehen.has(key)) continue;
+    gesehen.add(key);
+    outfits.push({ ids, grund: String(o.grund || '').slice(0, 180) });
+  }
+  console.info(`Stylistin: ${outfits.length} übernommen, ${aussortiert} von den Regeln aussortiert`);
+  return { outfits, aussortiert };
+}
+
+/* Noch nicht gezeigte Outfits der Stylistin für die aktuelle Auswahl.
+   Erneut geprüft, weil sich Teile seit der Abfrage geändert haben können. */
+function stylistOffen() {
+  const e = STYLIST[stylistSchluessel()];
+  if (!e || !e.outfits || !e.outfits.length) return [];
+  const blocked = blockedKeys();
+  const imPool = new Set(poolFor(UI.season).map(i => i.id));
+  return e.outfits.filter(o => !blocked.has(outfitKey(o.ids)) && o.ids.every(id => imPool.has(id))
+    && validOutfit(o.ids.map(itemById), UI.season));
+}
+
+function stylistNoetig() {
+  if (!dienstUrl() || poolLuecke(UI.season)) return false;
+  const e = STYLIST[stylistSchluessel()];
+  if (e && e.fehlerAm && Date.now() - e.fehlerAm < STYLIST_PAUSE_MS) return false;
+  if (!e || !e.datum) return true;
+  /* Höchstens einmal am Tag von selbst nachfragen – das Kontingent ist knapp */
+  return stylistOffen().length < 3 && e.datum !== todayISO();
+}
+const stylistWartet = () => stylistLaeuft === stylistSchluessel() && UI.ohneStylist !== stylistSchluessel();
+
+async function stylistHolen(manuell) {
+  if (stylistLaeuft) return;
+  const key = stylistSchluessel();
+  const season = UI.season, mood = UI.mood;
+  stylistLaeuft = key;
+  if (manuell) render();
+  try {
+    const r = await kiStylist(season, mood);
+    STYLIST[key] = { datum: todayISO(), outfits: r.outfits };
+    if (manuell && !r.outfits.length) toast('Diesmal hat kein Vorschlag die Prüfung bestanden. Versuch es später noch einmal.');
+  } catch (e) {
+    const alt = STYLIST[key] || {};
+    STYLIST[key] = { ...alt, outfits: alt.outfits || [], fehlerAm: Date.now() };
+    const text = fehlerText(e);
+    if (manuell) toast(text);
+  } finally {
+    stylistLaeuft = null;
+    stylistSpeichern();
+    /* Nur neu aufbauen, wenn noch dieselbe Auswahl offen ist. Die Karte, die
+       gerade angezeigt wird, bleibt stehen – nichts springt unter dem Finger weg. */
+    if (UI.tab === 'today' && !UI.builder && !UI.sorting) {
+      if (stylistSchluessel() === key) UI.queue = UI.queue && UI.queue.length ? UI.queue.slice(0, 1) : null;
+      render();   /* bei inzwischen anderer Auswahl startet render() deren Abfrage */
+    }
+  }
+}
+
 /* ================= Rendern ================= */
 const TAB_TITEL = { today: 'Heute', closet: 'Schrank', outfits: 'Outfits', trends: 'Trends', data: 'Daten' };
 
@@ -1369,9 +1602,13 @@ const seasonChips = (active, fn) => `<div class="chips">${SEASONS.map(s =>
   `<button class="chip ${active === s.key ? 'active' : ''}" onclick="${fn}('${s.key}')">${ico(s.ico)} ${s.label}</button>`).join('')}</div>`;
 
 function renderToday() {
-  ensureQueue();
-  const moods = [[2, 'Leger'], [3, 'Normal'], [4, 'Schick']];
-  const c = UI.queue[0];
+  if (stylistNoetig() && !stylistLaeuft) setTimeout(() => stylistHolen(false), 0);
+  /* Laufende Abfrage für genau diese Auswahl: warten statt lokal auffüllen */
+  const wartet = (stylistNoetig() && UI.ohneStylist !== stylistSchluessel()) || stylistWartet();
+  if (!wartet) ensureQueue();
+  const moods = [[2, 'Leger'], [3, 'Normal'], [4, 'Schick'], [SPORT_ANLASS, 'Sport']];
+  const c = wartet ? null : UI.queue[0];
+  const saisonLbl = esc(SEASONS.find(x => x.key === UI.season).label);
   return `<div class="card">
     <h3>Jahreszeit</h3>
     ${seasonChips(UI.season, 'App.setSeason')}
@@ -1379,17 +1616,44 @@ function renderToday() {
     <div class="chips">${moods.map(([v, l]) =>
       `<button class="chip ${UI.mood === v ? 'active' : ''}" onclick="App.setMood(${v})">${l}</button>`).join('')}</div>
   </div>
-  ${c ? swipeHTML(c) : (() => {
+  ${wartet ? `<div class="card stylist-laedt">
+      <span class="spin"></span>
+      <h2>Deine Stylistin stellt zusammen …</h2>
+      <p class="hint">Sie geht deinen Schrank für ${saisonLbl} durch. Das dauert ein paar Sekunden.</p>
+      <button class="btn small" onclick="App.stylistNichtWarten()">Nicht warten</button>
+    </div>`
+  : c ? swipeHTML(c) + stylistFussHTML()
+  : (() => {
       const luecke = poolLuecke(UI.season);
-      const saison = esc(SEASONS.find(x => x.key === UI.season).label);
-      return `<div class="card"><h2>${luecke ? 'Da fehlt etwas' : 'Für heute durch'}</h2>
-      <p class="hint">${luecke
-        ? `Für ${saison} sind keine <b>${esc(luecke)}</b> im Schrank. Ohne die lässt sich kein Outfit
+      const sport = istSportModus();
+      const geht = luecke ? false : kombinierbar(UI.season);
+      const titel = luecke || !geht ? 'Da fehlt etwas' : 'Für heute durch';
+      const text = sport && (luecke || !geht)
+        ? `Für ${saisonLbl} ist nicht genug Sportkleidung im Schrank. Öffne ein Teil und tippe auf
+           <i>Sportbekleidung</i>, oder prüfe unter <i>Jahreszeiten durchgehen</i>, ob deine
+           Sportsachen auch für ${saisonLbl} gesetzt sind.`
+        : luecke
+        ? `Für ${saisonLbl} sind keine <b>${esc(luecke)}</b> im Schrank. Ohne die lässt sich kein Outfit
            bauen – prüfe im Schrank unter <i>Jahreszeiten durchgehen</i>, ob dort etwas zu eng gesetzt ist.`
-        : `Keine weiteren Kombinationen für ${saison} und diesen Anlass. Morgen kommen die
-           „Not today\"-Vorschläge wieder – oder du änderst oben die Auswahl.`}</p>
-      ${(DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen (${DB.tossed.length})</button>` : ''}
+        : !geht
+        ? `Mit den Teilen für ${saisonLbl} lässt sich für diesen Anlass kein stimmiges Outfit bilden.
+           Probier einen anderen Anlass oder prüfe die Jahreszeiten im Schrank.`
+        : `Keine weiteren Kombinationen für ${saisonLbl} und diesen Anlass. Morgen kommen die
+           „Not today\"-Vorschläge wieder – oder du änderst oben die Auswahl.`;
+      return `<div class="card"><h2>${titel}</h2>
+      <p class="hint">${text}</p>
+      ${geht && dienstUrl() && !stylistLaeuft ? `<button class="btn block" onclick="App.stylistNeu()">${ico('sparkle')} Neue Ideen der Stylistin</button>` : ''}
+      ${geht && (DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen (${DB.tossed.length})</button>` : ''}
     </div>`; })()}`;
+}
+
+/* Unter der Karte: woher der Vorschlag kommt – und die Möglichkeit, neue
+   Ideen zu holen, wenn gerade nur die lokale Auswahl läuft. */
+function stylistFussHTML() {
+  if (!dienstUrl() || UI.queue.some(q => q.ki)) return '';
+  return `<p class="small center stylist-fuss">Vorschläge aus der einfachen Auswahl.
+    ${stylistLaeuft ? 'Die Stylistin arbeitet gerade …'
+      : `<button class="linkbtn" onclick="App.stylistNeu()">${ico('sparkle')} Ideen der Stylistin holen</button>`}</p>`;
 }
 
 function swipeHTML(c) {
@@ -1401,6 +1665,7 @@ function swipeHTML(c) {
       <div class="stamp toss">TOSS</div>
       <div class="stamp skip">NOT TODAY</div>
       ${collageHTML(items)}
+      ${c.grund ? `<p class="grund">${ico('sparkle')}<span>${esc(c.grund)}</span></p>` : ''}
       <p class="small" style="margin:10px 0 6px">${items.map(it =>
         esc(it.name || CATS[it.cat].label)).join(' · ')}</p>
       <span class="worldtags">${worlds.length
@@ -1930,6 +2195,10 @@ function renderModal() {
       <input type="text" value="${esc(d.name || '')}" placeholder="${esc(CATS[d.cat].label)}"
         oninput="App.draftSet('name', this.value, true)">
     </label>
+    <div class="chips" style="margin-top:10px">
+      <button class="chip ${istSport(d) ? 'active' : ''}" onclick="App.draftSport()">Sportbekleidung</button>
+    </div>
+    <p class="small" style="margin:0 0 6px">Sportbekleidung erscheint nur beim Anlass „Sport".</p>
     <h3>Jahreszeiten</h3>
     <p class="small" style="margin:0 0 6px">Mehrfachauswahl – ein Teil darf zu mehreren passen.</p>
     <div class="chips">
@@ -2096,6 +2365,10 @@ App.decide = what => {
   if (what === 'skip') card.querySelector('.stamp.skip').style.opacity = 1;
   setTimeout(render, 230);
 };
+App.stylistNeu = () => stylistHolen(true);
+/* Wer nicht warten will, bekommt sofort die lokale Auswahl; die Ergebnisse
+   der Stylistin rücken nach, sobald sie da sind. */
+App.stylistNichtWarten = () => { UI.ohneStylist = stylistSchluessel(); UI.queue = null; render(); };
 App.resetTossed = () => {
   if (!confirm('Alle verworfenen Kombinationen wieder zulassen?')) return;
   DB.tossed = [];
@@ -2423,6 +2696,13 @@ App.draftSet = (key, val, quiet) => {
   d[key] = val;
   if (!quiet) render();
 };
+/* Ausdrückliche Markierung schlägt Name und KI – etwa für modische Leggings */
+App.draftSport = () => {
+  const d = UI.draft;
+  if (!d) return;
+  d.sport = !istSport(d);
+  render();
+};
 App.draftSeason = key => {
   const d = UI.draft;
   if (!d) return;
@@ -2710,6 +2990,65 @@ App.exportData = async withPics => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
+/* Backup zusammenführen statt nur neue Teile anzuhängen.
+
+   Vorher wurde ein schon vorhandenes Teil komplett übersprungen – eine KI-Analyse
+   oder Sortierarbeit aus dem Backup ging dann verloren. Outfits, Stilprofil und
+   verworfene Kombinationen wurden gar nicht eingelesen.
+
+   Regel: der weiter fortgeschrittene Stand gewinnt, aber nie wird etwas
+   überschrieben, das auf diesem Gerät schon bestätigt ist. */
+function zusammenfuehren(inc) {
+  let neuTeile = 0, neuAnalysen = 0, neuSortiert = 0, neuOutfits = 0, profil = false;
+  const lokal = new Map(DB.items.map(i => [i.id, i]));
+
+  for (const it of (inc.items || [])) {
+    const da = lokal.get(it.id);
+    if (!da) { DB.items.push(it); neuTeile++; continue; }
+
+    /* KI-Analyse: die jüngere gewinnt */
+    const kiNeu = it.ki && it.ki.analysiert;
+    const kiAlt = da.ki && da.ki.analysiert;
+    if (kiNeu && (!kiAlt || it.ki.analysiert > da.ki.analysiert)) {
+      da.ki = JSON.parse(JSON.stringify(it.ki)); neuAnalysen++;
+    }
+    /* Unterkategorie: nur übernehmen, wenn hier noch unsortiert */
+    if (da.needsSort && !it.needsSort) { da.cat = it.cat; delete da.needsSort; neuSortiert++; }
+    /* Jahreszeiten, Wärme, Anlass: nur übernehmen, wenn hier noch ungeprüft */
+    if (da.seasonsAuto && !it.seasonsAuto) {
+      da.seasons = [...(it.seasons || [])];
+      if (it.warmth) da.warmth = it.warmth;
+      if (it.formality) da.formality = it.formality;
+      delete da.seasonsAuto; neuSortiert++;
+    }
+  }
+
+  const knownT = new Set(DB.trends.map(t => t.id));
+  for (const t of (inc.trends || [])) if (!knownT.has(t.id)) DB.trends.push(t);
+
+  /* Outfits: gleiche Kombination nicht doppelt, auch wenn die ID abweicht */
+  const schonDa = new Set(DB.outfits.map(o => o.id));
+  const schonKombi = new Set(DB.outfits.map(o => outfitKey(o.ids)));
+  for (const o of (inc.outfits || [])) {
+    if (schonDa.has(o.id) || schonKombi.has(outfitKey(o.ids))) continue;
+    DB.outfits.push(o); schonKombi.add(outfitKey(o.ids)); neuOutfits++;
+  }
+
+  DB.tossed = [...new Set([...(DB.tossed || []), ...(inc.tossed || [])])];
+
+  if (inc.profil && (!DB.profil || (inc.profil.erstellt || '') > (DB.profil.erstellt || ''))) {
+    DB.profil = inc.profil; profil = true;
+  }
+
+  const teile = [];
+  if (neuTeile) teile.push(`${neuTeile} ${neuTeile === 1 ? 'Teil' : 'Teile'}`);
+  if (neuAnalysen) teile.push(`${neuAnalysen} ${neuAnalysen === 1 ? 'Analyse' : 'Analysen'}`);
+  if (neuSortiert) teile.push(`${neuSortiert}× Sortierung`);
+  if (neuOutfits) teile.push(`${neuOutfits} ${neuOutfits === 1 ? 'Outfit' : 'Outfits'}`);
+  if (profil) teile.push('Stilprofil');
+  return teile.length ? 'Übernommen: ' + teile.join(', ') : '';
+}
+
 App.chooseImport = () => { const i = $('#pick-import'); i.value = ''; i.click(); };
 App.importChosen = async input => {
   const file = input.files && input.files[0];
@@ -2719,20 +3058,13 @@ App.importChosen = async input => {
     const data = JSON.parse(await file.text());
     if (data.app !== 'outfit') throw new Error('Kein Outfit-Backup');
     const incoming = migrate(data.db);
-    const known = new Set(DB.items.map(i => i.id));
-    let added = 0;
-    for (const it of (incoming.items || [])) {
-      if (known.has(it.id)) continue;
-      DB.items.push(it); added++;
-    }
-    const knownT = new Set(DB.trends.map(t => t.id));
-    for (const t of (incoming.trends || [])) if (!knownT.has(t.id)) DB.trends.push(t);
+    const bericht = zusammenfuehren(incoming);
     for (const [id, du] of Object.entries(data.pics || {})) {
       if (!(await picGet(id).catch(() => null))) await picPut(id, dataURLtoBlob(du));
     }
     save();
     UI.queue = null;
-    toast(`${added} ${added === 1 ? 'Teil' : 'Teile'} übernommen`);
+    toast(bericht || 'Nichts Neues im Backup');
     render();
   } catch (e) {
     console.error(e);
