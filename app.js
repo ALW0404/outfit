@@ -1163,13 +1163,17 @@ const MERKMALE = [
   { key: 'sneakerSchick', text: 'Sneaker zu schicken Teilen',
     test: it => it.some(istSneaker) && kernTeile(it).some(i => (i.formality || 3) >= 4) },
   { key: 'zweiMuster', text: 'zwei auffällige Muster in einem Outfit',
-    test: it => it.filter(lautesMuster).length >= 2 }
+    test: it => it.filter(lautesMuster).length >= 2 },
+  /* Jacke über Strick: oft zu eng, die Jacke geht nicht mehr zu */
+  { key: 'jackeUeberStrick', text: 'eine Jacke über einem Pullover oder einer Strickjacke',
+    test: it => it.some(i => i.cat === 'outer') && it.some(i => i.cat === 'knit') }
 ];
 
 /* Begründungen aus dem Toss-Dialog, Schlüssel → Text für die Stylistin */
 const TOSS_GRUENDE = [
   ['farben', 'Farben'], ['schuhe', 'Schuhe'], ['zuschick', 'Zu schick'],
-  ['zuleger', 'Zu leger'], ['stil', 'Stilbruch'], ['saison', 'Jahreszeit']
+  ['zuleger', 'Zu leger'], ['stil', 'Stilbruch'], ['saison', 'Jahreszeit'],
+  ['layer', 'Layer zu viel']
 ];
 
 const LIKE_GEWICHT = 0.5;
@@ -1622,9 +1626,14 @@ function aufbauOk(items) {
   return kern && n('shoes') === 1 && n('layer') <= 1 && n('bag') <= 1 && n('acc') <= 2;
 }
 
-async function kiStylist(season, mood) {
-  const basis = dienstUrl();
-  if (!basis) throw new Error('Kein KI-Dienst eingerichtet');
+/* Die Anfrage an die Stylistin – live wie für den Nachtlauf dieselbe.
+   poolFor hängt am gewählten Anlass, deshalb kurz umschalten. */
+function stylistAnfrage(season, mood) {
+  const altMood = UI.mood;
+  UI.mood = mood;
+  try { return stylistAnfrageBauen(season, mood); } finally { UI.mood = altMood; }
+}
+function stylistAnfrageBauen(season, mood) {
   const pool = poolFor(season).slice(0, 220);
   const code = new Map(), zurueck = new Map();
   pool.forEach((it, i) => { code.set(it.id, 'T' + (i + 1)); zurueck.set('T' + (i + 1), it); });
@@ -1640,9 +1649,7 @@ async function kiStylist(season, mood) {
     .map(k => ({ teile: alsCodes(k.split('|')), grund: grundText(k) }))
     .filter(v => v.teile).slice(0, 25);
   const p = DB.profil;
-  const res = await fetch(basis + '/stylist', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  return { zurueck, luecke: pool.length < 3, anfrage: {
       saison: SEASONS.find(x => x.key === season).label,
       anlass: ANLASS_TEXT[mood] || ANLASS_TEXT[3],
       anzahl: STYLIST_ANZAHL,
@@ -1654,7 +1661,16 @@ async function kiStylist(season, mood) {
       okay: Object.entries(DB.okay || {}).sort((a, b) => b[1].localeCompare(a[1]))
         .map(([k]) => alsCodes(k.split('|'))).filter(Boolean).slice(0, 15),
       gemocht, verworfen
-    })
+  } };
+}
+
+async function kiStylist(season, mood) {
+  const basis = dienstUrl();
+  if (!basis) throw new Error('Kein KI-Dienst eingerichtet');
+  const { anfrage, zurueck } = stylistAnfrage(season, mood);
+  const res = await fetch(basis + '/stylist', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(anfrage)
   });
   const j = await antwortLesen(res);
   const outfits = [], gesehen = new Set();
@@ -1687,13 +1703,71 @@ function stylistOffen() {
 }
 
 function stylistNoetig() {
-  if (!dienstUrl() || poolLuecke(UI.season)) return false;
+  if (!dienstUrl() || poolLuecke(UI.season) || nachtLaedt) return false;
   const e = STYLIST[stylistSchluessel()];
   if (e && e.fehlerAm && Date.now() - e.fehlerAm < STYLIST_PAUSE_MS) return false;
   if (!e || !e.datum) return true;
   /* Höchstens einmal am Tag von selbst nachfragen – das Kontingent ist knapp */
   return stylistOffen().length < 3 && e.datum !== todayISO();
 }
+/* ===== Nachtlauf =====
+   Nachts stellt die Stylistin auf dem Server die Outfits für die zuletzt gewählte
+   Jahreszeit und alle Anlässe zusammen. Dafür legt die App bei jedem Öffnen die
+   Anfragen ab – nur Text, keine Fotos. Beim Start holt sie die Ergebnisse ab,
+   bevor sie selbst nachfragt; so gibt es morgens keine Wartezeit. */
+const NACHT_ANLAESSE = [2, 3, 4, SPORT_ANLASS];
+let nachtLaedt = false;
+let _schrankStand = '';
+
+async function schrankAblegen() {
+  const basis = dienstUrl();
+  if (!basis || !DB.items.length) return;
+  const auftraege = [];
+  for (const mood of NACHT_ANLAESSE) {
+    const { anfrage, zurueck, luecke } = stylistAnfrage(UI.season, mood);
+    if (luecke) continue;
+    const karte = {};
+    zurueck.forEach((it, k) => { karte[k] = it.id; });
+    auftraege.push({ schluessel: UI.season + '|' + mood, anfrage, karte });
+  }
+  const rumpf = JSON.stringify({ auftraege });
+  if (rumpf === _schrankStand) return;         /* nichts geändert – nicht erneut senden */
+  try {
+    const res = await fetch(basis + '/schrank', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: rumpf });
+    if (res.ok) _schrankStand = rumpf;
+  } catch (e) { console.warn('Schrank ablegen:', e); }
+}
+
+async function nachtAbholen() {
+  const basis = dienstUrl();
+  if (!basis) return;
+  nachtLaedt = true;
+  try {
+    const ab = new AbortController();
+    const uhr = setTimeout(() => ab.abort(), 6000);
+    const res = await fetch(basis + '/nacht', { signal: ab.signal,
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    clearTimeout(uhr);
+    if (!res.ok) return;
+    const n = await res.json();
+    let neu = false;
+    for (const [k, v] of Object.entries(n || {})) {
+      if (!v || !v.datum || !Array.isArray(v.outfits) || !v.outfits.length) continue;
+      const lokal = STYLIST[k];
+      /* Nur übernehmen, was frischer ist als das, was schon auf dem Gerät liegt */
+      if (lokal && lokal.datum && lokal.datum >= v.datum) continue;
+      STYLIST[k] = { datum: v.datum, outfits: v.outfits.filter(o => o.ids.every(itemById)), nacht: true };
+      neu = true;
+    }
+    if (neu) stylistSpeichern();
+  } catch (e) { console.warn('Nachtergebnisse:', e); }
+  finally {
+    nachtLaedt = false;
+    if (UI.tab === 'today' && !UI.builder && !UI.sorting) { UI.queue = null; render(); }
+  }
+}
+
 const stylistWartet = () => stylistLaeuft === stylistSchluessel() && UI.ohneStylist !== stylistSchluessel();
 
 async function stylistHolen(manuell) {
@@ -1757,7 +1831,7 @@ const seasonChips = (active, fn) => `<div class="chips">${SEASONS.map(s =>
 function renderToday() {
   if (stylistNoetig() && !stylistLaeuft) setTimeout(() => stylistHolen(false), 0);
   /* Laufende Abfrage für genau diese Auswahl: warten statt lokal auffüllen */
-  const wartet = (stylistNoetig() && UI.ohneStylist !== stylistSchluessel()) || stylistWartet();
+  const wartet = nachtLaedt || (stylistNoetig() && UI.ohneStylist !== stylistSchluessel()) || stylistWartet();
   if (!wartet) ensureQueue();
   const moods = [[2, 'Leger'], [3, 'Normal'], [4, 'Schick'], [SPORT_ANLASS, 'Sport']];
   const c = wartet ? null : UI.queue[0];
@@ -3310,7 +3384,22 @@ document.addEventListener('paste', ev => {
   (UI.tab === 'trends' ? addTrendFrom : openStudio)(it.getAsFile());
 });
 
+/* Erst die Ergebnisse der Nacht abholen, dann den aktuellen Schrank für die
+   nächste Nacht ablegen. Beim Verlassen der App noch einmal ablegen – dann
+   sind die Entscheidungen des Tages in der Nacht schon berücksichtigt. */
+let _nachtZuletzt = 0;
+const nachtAbgleich = () => {
+  if (!dienstUrl() || Date.now() - _nachtZuletzt < 60 * 60 * 1000) return;
+  _nachtZuletzt = Date.now();
+  nachtAbholen().then(schrankAblegen);
+};
+if (dienstUrl()) nachtLaedt = true;     /* nicht live fragen, bevor die Nacht geprüft ist */
 render();
+nachtAbgleich();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') nachtAbgleich();
+  else schrankAblegen();
+});
 
 /* Trennlinie im Kopf erst zeigen, wenn Inhalt darunter weggescrollt ist */
 const topbar = $('#topbar');

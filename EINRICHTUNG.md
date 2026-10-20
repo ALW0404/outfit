@@ -219,6 +219,12 @@ Sie läuft auf dem stärkeren Modell `gemini-flash-latest`; ist dessen Kontingen
 automatisch `gemini-flash-lite-latest` ein. Ein anderes Modell lässt sich mit der Variable
 `STYLIST_MODEL` festlegen – `/status` zeigt unter `stylistModell`, welches gilt.
 
+**Nachtlauf:** Der Worker hat einen Zeitplan (Cron `0 2 * * *`, also 2 Uhr UTC) und arbeitet dann
+die von der App abgelegten Aufträge ab – je Anlass der aktuellen Jahreszeit eine Abfrage, also vier
+pro Nacht. Sie zählen gegen `TAGESLIMIT`. `/status` zeigt unter `nacht`, wann der Schrank zuletzt
+abgelegt wurde und was die letzte Nacht ergeben hat. Die Daten liegen im KV-Speicher `outfit-zaehler`
+unter den Schlüsseln `schrank` und `nacht`.
+
 ### Wenn das Kontingent trotzdem nicht reicht
 
 | Weg | Wirkung |

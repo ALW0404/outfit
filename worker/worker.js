@@ -257,7 +257,85 @@ async function gemini(env, teile, schema, temperatur = 0.2, modellWunsch) {
   return ergebnis;
 }
 
+/* Eine Stylistin-Abfrage: aus App-Anfrage oder nächtlichem Auftrag */
+async function stylistErzeugen(env, body) {
+  const teile = Array.isArray(body.teile) ? body.teile.slice(0, 220) : [];
+  if (teile.length < 3) return { fehler: 'Zu wenige Teile' };
+  const anzahl = Math.max(3, Math.min(20, parseInt(body.anzahl || 15, 10)));
+  const zeilen = teile.map(t => `${String(t.k).slice(0, 8)}: ${String(t.t).slice(0, 220)}`);
+  /* Einträge sind Kürzellisten oder {teile, grund} – beides annehmen */
+  const zeile = o => {
+    const teile = Array.isArray(o) ? o : (o && Array.isArray(o.teile) ? o.teile : []);
+    const grund = o && !Array.isArray(o) && o.grund ? `  (Grund: ${String(o.grund).slice(0, 40)})` : '';
+    return teile.slice(0, 8).map(x => String(x).slice(0, 8)).join(' + ') + grund;
+  };
+  const beispiele = (liste, titel, max) => Array.isArray(liste) && liste.length
+    ? `\n\n${titel}\n` + liste.slice(0, max).map(zeile).join('\n') : '';
+  const liste = (a, n, l) => Array.isArray(a) ? a.slice(0, n).map(x => String(x).slice(0, l)) : [];
+  const p = body.profil || {};
+  const profil = [
+    p.aesthetik && `Geschmack: ${String(p.aesthetik).slice(0, 600)}`,
+    p.farbregeln && `Farben: ${String(p.farbregeln).slice(0, 400)}`,
+    liste(p.stylingregeln, 8, 160).length && `Styling:\n- ${liste(p.stylingregeln, 8, 160).join('\n- ')}`,
+    liste(p.stil, 4, 20).length && `Stilrichtung: ${liste(p.stil, 4, 20).join(', ')}`,
+    liste(p.silhouetten, 4, 20).length && `Bevorzugte Silhouetten: ${liste(p.silhouetten, 4, 20).join(', ')}`,
+    liste(p.vermeiden, 6, 120).length && `Vermeiden: ${liste(p.vermeiden, 6, 120).join('; ')}`
+  ].filter(Boolean).join('\n');
+  const regeln = liste(body.regeln, 12, 200);
+  const text = PROMPT_STYLIST +
+    `\n\nJahreszeit: ${String(body.saison || '').slice(0, 30)}` +
+    `\nAnlass: ${String(body.anlass || '').slice(0, 80)}` +
+    `\nAnzahl Outfits: ${anzahl}` +
+    (profil ? `\n\nAus ihren Pinterest-Pins abgeleitet:\n${profil}` : '') +
+    (regeln.length ? `\n\nAus ihren Entscheidungen in der App gelernt:\n- ${regeln.join('\n- ')}` : '') +
+    `\n\nKleiderschrank:\n` + zeilen.join('\n') +
+    beispiele(body.gemocht, 'Diese Outfits hat die Person gemerkt – daran orientieren:', 20) +
+    beispiele(body.okay, 'Diese fand sie tragbar, aber nicht begeisternd – kein Fehler, aber auch nicht souverän. Das ist die Untergrenze; ziele höher:', 15) +
+    beispiele(body.verworfen, 'Diese Kombinationen hat sie verworfen – solche Fehler nicht wiederholen:', 25);
+  const ergebnis = await gemini(env, [{ text }], SCHEMA_STYLIST, 0.6,
+    env.STYLIST_MODEL || STYLIST_MODELL);
+  await zaehleHoch(env);
+  return ergebnis;
+}
+
+/* ===== Nachtlauf =====
+   Die App legt bei jedem Öffnen eine Textfassung des Schranks ab – je Anlass
+   der aktuellen Jahreszeit genau die Anfrage, die sie sonst live stellen würde,
+   plus die Zuordnung Kürzel → Teil. Nachts arbeitet die Stylistin die Aufträge
+   ab; morgens holt die App die fertigen Outfits ohne Wartezeit. Fotos liegen
+   hier nie, nur Namen und Merkmale. */
+const NACHT_PAUSE_MS = 8000;      /* nicht zu schnell hintereinander, sonst greift Googles Minutengrenze */
+const tagUTC = () => new Date().toISOString().slice(0, 10);
+
+async function nachtlauf(env) {
+  if (!env.ZAEHLER || !env.GEMINI_KEY) return;
+  const schrank = await env.ZAEHLER.get('schrank', 'json');
+  if (!schrank || !Array.isArray(schrank.auftraege)) return;
+  const limit = parseInt(env.TAGESLIMIT || '10', 10);
+  const ergebnis = (await env.ZAEHLER.get('nacht', 'json')) || {};
+  for (const a of schrank.auftraege.slice(0, 6)) {
+    if (await verbrauch(env) >= limit) break;
+    try {
+      const r = await stylistErzeugen(env, a.anfrage || {});
+      const karte = a.karte || {};
+      const outfits = (r.outfits || []).map(o => ({
+        ids: (o.teile || []).map(c => karte[String(c).trim().toUpperCase()]),
+        grund: String(o.grund || '').slice(0, 180)
+      })).filter(o => o.ids.length && o.ids.every(Boolean));
+      ergebnis[a.schluessel] = { datum: tagUTC(), outfits };
+    } catch (e) {
+      ergebnis[a.schluessel] = { ...(ergebnis[a.schluessel] || {}), fehler: String(e.message || e).slice(0, 200) };
+    }
+    await env.ZAEHLER.put('nacht', JSON.stringify(ergebnis));
+    await new Promise(r => setTimeout(r, NACHT_PAUSE_MS));
+  }
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(nachtlauf(env));
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors(env) });
@@ -301,6 +379,13 @@ export default {
         limit,
         modell: env.GEMINI_MODEL || STANDARD_MODELL,
         stylistModell: env.STYLIST_MODEL || STYLIST_MODELL,
+        nacht: env.ZAEHLER ? await (async () => {
+          const n = (await env.ZAEHLER.get('nacht', 'json')) || {};
+          const s = await env.ZAEHLER.get('schrank', 'json');
+          return { abgelegt: s ? s.abgelegt : null, auftraege: s ? s.auftraege.length : 0,
+            ergebnisse: Object.fromEntries(Object.entries(n).map(([k, v]) =>
+              [k, v.fehler ? 'Fehler' : `${(v.outfits || []).length} Outfits vom ${v.datum}`])) };
+        })() : null,
         schluessel,
         offen
       }, env);
@@ -349,6 +434,20 @@ export default {
       }
     }
 
+    if (url.pathname === '/schrank' || url.pathname === '/nacht') {
+      if (!env.ZAEHLER) return json({ fehler: 'KV-Bindung ZAEHLER fehlt' }, env, 500);
+      if (url.pathname === '/nacht') {
+        return json((await env.ZAEHLER.get('nacht', 'json')) || {}, env);
+      }
+      const roh = await request.text();
+      if (roh.length > 400000) return json({ fehler: 'Zu groß' }, env, 413);
+      let s;
+      try { s = JSON.parse(roh); } catch { return json({ fehler: 'Ungültiger Rumpf' }, env, 400); }
+      if (!Array.isArray(s.auftraege)) return json({ fehler: 'Feld "auftraege" fehlt' }, env, 400);
+      await env.ZAEHLER.put('schrank', JSON.stringify({ abgelegt: new Date().toISOString(), auftraege: s.auftraege.slice(0, 6) }));
+      return json({ ok: true }, env);
+    }
+
     const genutzt = await verbrauch(env);
     if (genutzt >= limit) {
       return json({ fehler: 'Tageskontingent aufgebraucht', heute: genutzt, limit }, env, 429);
@@ -384,47 +483,13 @@ export default {
       }
 
       if (url.pathname === '/stylist') {
-        const teile = Array.isArray(body.teile) ? body.teile.slice(0, 220) : [];
-        if (teile.length < 3) return json({ fehler: 'Zu wenige Teile' }, env, 400);
-        const anzahl = Math.max(3, Math.min(20, parseInt(body.anzahl || 15, 10)));
-        const zeilen = teile.map(t => `${String(t.k).slice(0, 8)}: ${String(t.t).slice(0, 220)}`);
-        /* Einträge sind Kürzellisten oder {teile, grund} – beides annehmen */
-        const zeile = o => {
-          const teile = Array.isArray(o) ? o : (o && Array.isArray(o.teile) ? o.teile : []);
-          const grund = o && !Array.isArray(o) && o.grund ? `  (Grund: ${String(o.grund).slice(0, 40)})` : '';
-          return teile.slice(0, 8).map(x => String(x).slice(0, 8)).join(' + ') + grund;
-        };
-        const beispiele = (liste, titel, max) => Array.isArray(liste) && liste.length
-          ? `\n\n${titel}\n` + liste.slice(0, max).map(zeile).join('\n') : '';
-        const liste = (a, n, l) => Array.isArray(a) ? a.slice(0, n).map(x => String(x).slice(0, l)) : [];
-        const p = body.profil || {};
-        const profil = [
-          p.aesthetik && `Geschmack: ${String(p.aesthetik).slice(0, 600)}`,
-          p.farbregeln && `Farben: ${String(p.farbregeln).slice(0, 400)}`,
-          liste(p.stylingregeln, 8, 160).length && `Styling:\n- ${liste(p.stylingregeln, 8, 160).join('\n- ')}`,
-          liste(p.stil, 4, 20).length && `Stilrichtung: ${liste(p.stil, 4, 20).join(', ')}`,
-          liste(p.silhouetten, 4, 20).length && `Bevorzugte Silhouetten: ${liste(p.silhouetten, 4, 20).join(', ')}`,
-          liste(p.vermeiden, 6, 120).length && `Vermeiden: ${liste(p.vermeiden, 6, 120).join('; ')}`
-        ].filter(Boolean).join('\n');
-        const regeln = liste(body.regeln, 12, 200);
-        const text = PROMPT_STYLIST +
-          `\n\nJahreszeit: ${String(body.saison || '').slice(0, 30)}` +
-          `\nAnlass: ${String(body.anlass || '').slice(0, 80)}` +
-          `\nAnzahl Outfits: ${anzahl}` +
-          (profil ? `\n\nAus ihren Pinterest-Pins abgeleitet:\n${profil}` : '') +
-          (regeln.length ? `\n\nAus ihren Entscheidungen in der App gelernt:\n- ${regeln.join('\n- ')}` : '') +
-          `\n\nKleiderschrank:\n` + zeilen.join('\n') +
-          beispiele(body.gemocht, 'Diese Outfits hat die Person gemerkt – daran orientieren:', 20) +
-          beispiele(body.okay, 'Diese fand sie tragbar, aber nicht begeisternd – kein Fehler, aber auch nicht souverän. Das ist die Untergrenze; ziele höher:', 15) +
-          beispiele(body.verworfen, 'Diese Kombinationen hat sie verworfen – solche Fehler nicht wiederholen:', 25);
-        const ergebnis = await gemini(env, [{ text }], SCHEMA_STYLIST, 0.6,
-          env.STYLIST_MODEL || STYLIST_MODELL);
-        await zaehleHoch(env);
+        const ergebnis = await stylistErzeugen(env, body);
+        if (ergebnis.fehler) return json(ergebnis, env, 400);
         return json(ergebnis, env);
       }
 
       if (url.pathname === '/stilprofil') {
-        const bilder = Array.isArray(body.bilder) ? body.bilder.slice(0, 12) : [];
+        const bilder = Array.isArray(body.bilder) ? body.bilder.slice(0, 16) : [];
         if (!bilder.length) return json({ fehler: 'Feld "bilder" fehlt' }, env, 400);
         const ergebnis = await gemini(env, [
           { text: PROMPT_PROFIL },

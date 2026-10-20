@@ -18,7 +18,8 @@ Anlass ein, darunter kommt die Karte. Drei Entscheidungen:
 | **Toss** (nach links wischen) | kommt nie wieder |
 
 Bei **Toss** klappt direkt unter der Karte die Frage *Was hat nicht gepasst?* auf: Farben,
-Schuhe, Zu schick, Zu leger, Stilbruch, Jahreszeit oder *k. A.* Erst mit der Antwort fliegt die
+Schuhe, Zu schick, Zu leger, Stilbruch, Jahreszeit, *Layer zu viel* (etwa wenn die Jacke
+über dem Pullover zu eng wird) oder *k. A.* Erst mit der Antwort fliegt die
 Karte raus; das × schließt die Frage, ohne zu verwerfen.
 
 Die Heute-Ansicht ist so bemessen, dass Auswahl, Karte und Knöpfe ohne Scrollen auf den
@@ -54,6 +55,13 @@ sie fürs Lernen aber nicht.
 **Feste Stilregeln** zusätzlich: höchstens zwei dunkle Grundfarben (Schwarz, Navy, dunkles Braun),
 kniehohe Stiefel nur zu Rock oder Kleid, Glitzer und Pailletten nur beim Anlass *Schick* und nur
 zu schicken Teilen.
+
+**Nachtlauf.** Jede Nacht gegen 4 Uhr stellt die Stylistin auf dem Server die Outfits für die
+zuletzt gewählte Jahreszeit und alle vier Anlässe zusammen. Morgens sind sie beim Öffnen sofort da.
+Dafür legt die App beim Öffnen und Verlassen eine Textfassung des Schranks in deinem
+Cloudflare-Konto ab – Namen, Farben, Merkmale und das Gelernte, **keine Fotos**. Was du tagsüber
+entscheidest, fließt so in die nächste Nacht ein. Wechselst du auf eine andere Jahreszeit, fragt die
+App dort wie bisher live nach.
 
 Von selbst fragt die App höchstens einmal am Tag je Auswahl nach. Sind die Vorschläge durch, laufen
 die einfachen weiter; *Ideen der Stylistin holen* fragt sofort neu an. Ist der Dienst ausgelastet,
