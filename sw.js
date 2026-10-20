@@ -1,6 +1,7 @@
-const CACHE = 'outfit-v29';
+const CACHE = 'outfit-v30';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './manifest.json',
-  './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
+  './icon-192.png', './icon-512.png', './apple-touch-icon.png',
+  './fonts/instrument-serif.woff2', './fonts/instrument-serif-italic.woff2'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -27,7 +28,7 @@ self.addEventListener('fetch', e => {
     return res;
   };
 
-  if (url.pathname.includes('/ki/')) {
+  if (url.pathname.includes('/ki/') || url.pathname.includes('/fonts/')) {
     e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request).then(speichern)));
     return;
   }

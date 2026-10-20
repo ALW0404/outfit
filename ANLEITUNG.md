@@ -6,6 +6,13 @@
 Kleiderschrank-PWA: läuft komplett im Browser, kein Server, keine Accounts, keine laufenden Kosten.
 Alle Bilder und Daten bleiben auf dem Gerät.
 
+## Design
+
+Seit dem 20.10.2026 im Editorial-Stil: Titel in *Instrument Serif* (Open Font License, liegt unter
+`fonts/`), warmes Papier als Grund, Produktfotos auf Studiogrund. Die Tab-Leiste schwebt als Glas,
+Blätter fahren hoch und runter, Karten fliegen mit Schwung. Die vorherige Fassung ist archiviert –
+bei GitHub als Release **„Design 1 – vor dem Redesign“** (Tag `design-1`), lokal unter `archiv/`.
+
 ## Die fünf Reiter
 
 **Heute** – ein Vorschlag nach dem anderen, zum Durchwischen. Oben stellst du Jahreszeit und

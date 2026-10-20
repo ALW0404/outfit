@@ -7,3 +7,6 @@ outfit-backup-*.json
 !apple-touch-icon.png
 app.js.v1.bak
 style.css.bak
+
+# Lokales Archiv alter Fassungen – liegt bei GitHub als Tag/Release
+archiv/

@@ -40,7 +40,21 @@ const ICONS = {
   dice:    '<rect x="3.2" y="3.2" width="17.6" height="17.6" rx="4.4"/><circle cx="8.6" cy="8.6" r="1.15" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.15" fill="currentColor" stroke="none"/><circle cx="15.4" cy="15.4" r="1.15" fill="currentColor" stroke="none"/>',
   more:    '<path d="M7 17 17 7M9.4 7H17v7.6"/>',
   check:   '<path d="m5 12.8 4.6 4.6L19 7.4"/>',
-  plus:    '<path d="M12 5.2v13.6M5.2 12h13.6"/>'
+  plus:    '<path d="M12 5.2v13.6M5.2 12h13.6"/>',
+  search:  '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4"/>',
+  chev:    '<path d="m9 5 7 7-7 7"/>',
+  chevdown:'<path d="m6 9 6 6 6-6"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.9 1.8-1.9 0-.5-.2-.9-.5-1.3-.3-.3-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3Z"/><circle cx="7.5" cy="11" r="1.1"/><circle cx="10.5" cy="7.2" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/>',
+  shoe:    '<path d="M3 16.5V9.8c0-.6.5-1 1-.9 1.7.3 3.1 1.3 4 2.7l.7 1.1c.5.7 1.2 1.2 2 1.4l7.8 1.8A3 3 0 0 1 21 18.8V19H4a1 1 0 0 1-1-1v-1.5Z"/><path d="M3 16.5h18"/>',
+  tee:     '<path d="M8.5 3.5 4 6l1.6 4 2.2-.9V20.5h8.4V9.1l2.2.9L20 6l-4.5-2.5c-.5 1.6-1.9 2.6-3.5 2.6S9 5.1 8.5 3.5Z"/>',
+  blitz:   '<path d="M13 2.5 5 13.5h6l-1 8 8-11h-6l1-8Z"/>',
+  layers:  '<path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/>',
+  minus:   '<path d="M6 12h12"/>',
+  download:'<path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 19.5h14"/>',
+  upload:  '<path d="M12 20V9"/><path d="m7 13.5 5-5 5 5"/><path d="M5 4.5h14"/>',
+  shrink:  '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
+  trash:   '<path d="M4.5 7h15"/><path d="M9.5 7V4.8h5V7"/><path d="M6.5 7l.8 12.2a1 1 0 0 0 1 .8h7.4a1 1 0 0 0 1-.8L17.5 7"/>',
+  pencil:  '<path d="M15.2 5.2 18.8 8.8"/><path d="M4 20l1-4.4L16.4 4.2a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6L8.4 19 4 20Z"/>'
 };
 const ico = (n, cls) => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
@@ -374,9 +388,17 @@ function dropPicURL(id) {
   if (u) { URL.revokeObjectURL(u); picURLCache.delete(id); }
 }
 function hydratePics() {
+  /* Liegt das Bild schon im Speicher, sofort setzen – sonst blinkt es bei jedem
+     Neuzeichnen. Nur wirklich neu geladene Bilder werden weich eingeblendet. */
   document.querySelectorAll('img[data-pic]').forEach(async img => {
-    const u = await picURL(img.dataset.pic);
-    if (u) img.src = u; else img.style.visibility = 'hidden';
+    const id = img.dataset.pic;
+    if (picURLCache.has(id)) { img.src = picURLCache.get(id); return; }
+    img.classList.add('laedt');
+    const u = await picURL(id);
+    if (!u) { img.style.visibility = 'hidden'; return; }
+    img.onload = () => img.classList.remove('laedt');
+    img.src = u;
+    if (img.complete) img.classList.remove('laedt');
   });
 }
 
@@ -1800,16 +1822,78 @@ async function stylistHolen(manuell) {
 /* ================= Rendern ================= */
 const TAB_TITEL = { today: 'Heute', closet: 'Schrank', outfits: 'Outfits', trends: 'Trends', data: 'Daten' };
 
+/* Segment-Schalter: der Daumen soll gleiten, obwohl jedes Neuzeichnen neue
+   Elemente erzeugt. Deshalb mit der alten Position zeichnen und erst im
+   nächsten Bild auf die neue schieben. */
+const _seg = {};
+function segHTML(name, optionen, aktiv, aufruf) {
+  const neu = Math.max(0, optionen.findIndex(o => o[0] === aktiv));
+  const alt = name in _seg ? _seg[name] : neu;
+  _seg[name] = neu;
+  const arg = v => typeof v === 'number' ? v : `'${v}'`;
+  return `<div class="seg" style="--n:${optionen.length}; --i:${alt}" data-ziel="${neu}">${optionen.map(([v, l, ic]) =>
+    `<button class="${v === aktiv ? 'on' : ''}" onclick="${aufruf}(${arg(v)})">${ic ? ico(ic) : ''}${esc(l)}</button>`).join('')}</div>`;
+}
+
+/* Knöpfe rechts in der Kopfleiste – je Ansicht */
+function kopfAktionen() {
+  if (UI.sorting) return `<button class="kopfknopf" onclick="App.stopSort()">Fertig</button>`;
+  if (UI.builder) return `<button class="kopfknopf" onclick="App.closeBuilder()">Abbrechen</button>`;
+  if (UI.tab === 'closet') return `<button class="kopfknopf dunkel rund" onclick="App.aktion('neu')" aria-label="Teil hinzufügen">${ico('plus')}</button>`;
+  if (UI.tab === 'outfits') return `<button class="kopfknopf dunkel rund" onclick="App.newOutfit()" aria-label="Eigene Kombination">${ico('plus')}</button>`;
+  if (UI.tab === 'trends') return `<button class="kopfknopf dunkel rund" onclick="App.aktion('pin')" aria-label="Pin hinzufügen">${ico('plus')}</button>`;
+  return '';
+}
+
+const TABS = ['today', 'closet', 'outfits', 'trends', 'data'];
+let _letzteAnsicht = null, _letzterModal = '';
+
+function modalSchluessel() {
+  if (UI.studio) return 'studio';
+  if (UI.detail) return 'detail:' + UI.detail;
+  if (UI.tossOffen && UI.tab === 'today' && !UI.builder && !UI.sorting) return 'toss';
+  if (UI.modal) return UI.modal + ':' + ((UI.draft && UI.draft.id) || UI.picker || '');
+  return '';
+}
+
+/* Blätter fahren hoch und wieder runter, statt zu erscheinen und zu verschwinden.
+   Beim Neuzeichnen eines offenen Blatts bleibt die Scrollposition erhalten. */
+function renderOverlay() {
+  const root = $('#modal-root');
+  const mk = modalSchluessel();
+  const html = renderModal();
+  const altSheet = root.querySelector('.sheet');
+  const scroll = altSheet ? altSheet.scrollTop : 0;
+  if (!html) {
+    const o = root.firstElementChild;
+    if (o && _letzterModal && !o.classList.contains('zu')) {
+      o.classList.remove('neu'); o.classList.add('zu');
+      setTimeout(() => { if (!modalSchluessel() && root.firstElementChild === o) root.innerHTML = ''; }, 260);
+    } else if (!o || !o.classList.contains('zu')) root.innerHTML = '';
+  } else {
+    root.innerHTML = html;
+    const o = root.firstElementChild;
+    if (o && mk !== _letzterModal) o.classList.add('neu');
+    else { const sh = root.querySelector('.sheet'); if (sh) sh.scrollTop = scroll; }
+  }
+  _letzterModal = html ? mk : '';
+  hydratePics();
+  if (UI.studio) drawStudioPreview();
+}
+
 function render() {
   _usedIds = null;
-  const t = $('#title');
-  if (t) t.textContent = UI.sorting === 'season' ? 'Jahreszeiten'
+  const titel = UI.sorting === 'season' ? 'Jahreszeiten'
     : UI.sorting ? 'Nachsortieren'
-    : UI.builder ? 'Kombination'
+    : UI.builder ? (UI.builder.editId ? 'Bearbeiten' : 'Kombination')
     : (TAB_TITEL[UI.tab] || 'Outfit');
+  $('#title').textContent = titel;
+  $('#tabbar').style.setProperty('--tab', Math.max(0, TABS.indexOf(UI.tab)));
   document.querySelectorAll('#tabbar button').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === UI.tab));
+  $('#topaktion').innerHTML = kopfAktionen();
   const main = $('#main');
+  const ansicht = UI.sorting ? 'sort' : UI.builder ? 'builder' : UI.tab;
   main.innerHTML = UI.sorting ? renderSorter()
     : UI.builder ? renderBuilder()
     : UI.tab === 'today' ? renderToday()
@@ -1817,10 +1901,16 @@ function render() {
     : UI.tab === 'outfits' ? renderOutfits()
     : UI.tab === 'trends' ? renderTrends()
     : renderData();
-  $('#modal-root').innerHTML = renderModal();
-  hydratePics();
-  if (UI.studio) drawStudioPreview();
+  if (ansicht !== _letzteAnsicht) {
+    if (_letzteAnsicht !== null) window.scrollTo(0, 0);
+    main.classList.remove('einblenden'); void main.offsetWidth; main.classList.add('einblenden');
+    _letzteAnsicht = ansicht;
+  }
+  requestAnimationFrame(() => document.querySelectorAll('.seg[data-ziel]').forEach(el =>
+    el.style.setProperty('--i', el.dataset.ziel)));
+  renderOverlay();
   attachSwipe();
+  UI._neueKarte = false;
   if (UI.tab === 'data' && !UI.sorting && !UI.builder) showUsage();
   saveUI();
 }
@@ -1836,78 +1926,74 @@ function renderToday() {
   const moods = [[2, 'Leger'], [3, 'Normal'], [4, 'Schick'], [SPORT_ANLASS, 'Sport']];
   const c = wartet ? null : UI.queue[0];
   const saisonLbl = esc(SEASONS.find(x => x.key === UI.season).label);
-  /* Kompakt: Auswahl, Karte und Knöpfe sollen ohne Scrollen auf den Bildschirm passen */
-  return `<div class="card kompakt wahl">
-    <div class="chips zeile">${SEASONS.map(x =>
-      `<button class="chip ${UI.season === x.key ? 'active' : ''}" onclick="App.setSeason('${x.key}')">${x.label}</button>`).join('')}</div>
-    <div class="chips zeile">${moods.map(([v, l]) =>
-      `<button class="chip ${UI.mood === v ? 'active' : ''}" onclick="App.setMood(${v})">${l}</button>`).join('')}</div>
+  const saison = SEASONS.find(x => x.key === UI.season);
+  /* Kein großer Titel: auf Heute ist das Outfit der Star, jeder Pixel geht an die Karte */
+  return `<div class="heute-kopf">
+    ${segHTML('anlass', moods, UI.mood, 'App.setMood')}
+    <button class="kopfknopf" onclick="App.aktion('saison')">${ico(saison.ico)} ${esc(saison.label)} ${ico('chevdown', 'pfeil')}</button>
   </div>
   ${wartet ? `<div class="card stylist-laedt">
-      <span class="spin"></span>
-      <h2>Deine Stylistin stellt zusammen …</h2>
+      <div class="schimmer">${ico('sparkle')}</div>
+      <h2>Deine Stylistin stellt zusammen</h2>
       <p class="hint">Sie geht deinen Schrank für ${saisonLbl} durch. Das dauert ein paar Sekunden.</p>
       <button class="btn small" onclick="App.stylistNichtWarten()">Nicht warten</button>
     </div>`
-  : c ? swipeHTML(c) + stylistFussHTML()
+  : c ? swipeHTML(c, UI.queue.length > 1) + stylistFussHTML()
   : (() => {
       const luecke = poolLuecke(UI.season);
       const sport = istSportModus();
       const geht = luecke ? false : kombinierbar(UI.season);
       const titel = luecke || !geht ? 'Da fehlt etwas' : 'Für heute durch';
       const text = sport && (luecke || !geht)
-        ? `Für ${saisonLbl} ist nicht genug Sportkleidung im Schrank. Öffne ein Teil und tippe auf
-           <i>Sportbekleidung</i>, oder prüfe unter <i>Jahreszeiten durchgehen</i>, ob deine
-           Sportsachen auch für ${saisonLbl} gesetzt sind.`
+        ? `Für ${saisonLbl} ist nicht genug Sportkleidung im Schrank. Öffne ein Teil und schalte
+           <i>Sportbekleidung</i> ein, oder prüfe, ob deine Sportsachen auch für ${saisonLbl} gesetzt sind.`
         : luecke
         ? `Für ${saisonLbl} sind keine <b>${esc(luecke)}</b> im Schrank. Ohne die lässt sich kein Outfit
-           bauen – prüfe im Schrank unter <i>Jahreszeiten durchgehen</i>, ob dort etwas zu eng gesetzt ist.`
+           bauen – prüfe die Jahreszeiten deiner Teile.`
         : !geht
         ? `Mit den Teilen für ${saisonLbl} lässt sich für diesen Anlass kein stimmiges Outfit bilden.
-           Probier einen anderen Anlass oder prüfe die Jahreszeiten im Schrank.`
-        : `Keine weiteren Kombinationen für ${saisonLbl} und diesen Anlass. Mit „Like\" bewertete
-           kommen nach zwei Wochen wieder – oder du änderst oben die Auswahl.`;
-      return `<div class="card"><h2>${titel}</h2>
-      <p class="hint">${text}</p>
-      ${geht && dienstUrl() && !stylistLaeuft ? `<button class="btn block" onclick="App.stylistNeu()">${ico('sparkle')} Neue Ideen der Stylistin</button>` : ''}
-      ${geht && (DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen (${DB.tossed.length})</button>` : ''}
-    </div>`; })()}`;
+           Probier einen anderen Anlass.`
+        : `Alles für ${saisonLbl} und diesen Anlass gesehen. Mit „Like" bewertete Outfits kommen
+           nach zwei Wochen wieder.`;
+      return `<div class="card leer">
+        <div class="leer-ico">${ico(luecke || !geht ? 'tee' : 'check')}</div>
+        <h2>${titel}</h2>
+        <p class="hint">${text}</p>
+        ${geht && dienstUrl() && !stylistLaeuft ? `<button class="btn primary block" onclick="App.stylistNeu()">${ico('sparkle')} Neue Ideen der Stylistin</button>` : ''}
+        ${geht && (DB.tossed || []).length ? `<button class="btn block" onclick="App.resetTossed()">Verworfene wieder zulassen</button>` : ''}
+      </div>`; })()}`;
 }
 
 /* Unter der Karte: woher der Vorschlag kommt – und die Möglichkeit, neue
    Ideen zu holen, wenn gerade nur die lokale Auswahl läuft. */
 function stylistFussHTML() {
   if (!dienstUrl() || UI.queue.some(q => q.ki)) return '';
-  return `<p class="small center stylist-fuss">Vorschläge aus der einfachen Auswahl.
-    ${stylistLaeuft ? 'Die Stylistin arbeitet gerade …'
+  return `<p class="small stylist-fuss">${stylistLaeuft ? 'Die Stylistin arbeitet gerade …'
       : `<button class="linkbtn" onclick="App.stylistNeu()">${ico('sparkle')} Ideen der Stylistin holen</button>`}</p>`;
 }
 
-function swipeHTML(c) {
+function swipeHTML(c, weitere) {
   const items = c.ids.map(itemById).filter(Boolean);
   const offen = UI.tossOffen === outfitKey(c.ids);
-  return `<div class="swipe">
-    <div class="swipe-card${offen ? ' toss-offen' : ''}" id="card">
+  return `<div class="stapel">
+    ${weitere ? '<div class="hinten zwei"></div><div class="hinten"></div>' : ''}
+    <div class="swipe-card${offen ? ' toss-offen' : ''}${UI._neueKarte ? ' auftauchen' : ''}" id="card">
       <div class="stamp take">TAKE</div>
       <div class="stamp like">LIKE</div>
       <div class="stamp toss">TOSS</div>
       ${collageHTML(items)}
-      ${c.grund ? `<p class="grund">${ico('sparkle')}<span>${esc(c.grund)}</span></p>` : ''}
-      <p class="small teilnamen">${items.map(it => esc(it.name || CATS[it.cat].label)).join(' · ')}</p>
+      <div class="kartentext">
+        ${c.ki ? `<div class="quelle">${ico('sparkle')} Deine Stylistin</div>` : ''}
+        ${c.grund ? `<p class="grund"><span>${esc(c.grund)}</span></p>` : ''}
+        <p class="teilnamen">${items.map(it => esc(it.name || CATS[it.cat].label)).join(' · ')}</p>
+      </div>
     </div>
   </div>
-  ${offen ? `<div class="tosspanel">
-    <button class="tosszu" onclick="App.tossZurueck()" aria-label="Doch nicht verwerfen">${ico('x')}</button>
-    <p class="small">Was hat nicht gepasst?</p>
-    <div class="chips">${TOSS_GRUENDE.map(([k, l]) =>
-      `<button class="chip" onclick="App.tossMit('${k}')">${l}</button>`).join('')}
-      <button class="chip leise" onclick="App.tossMit('')">k. A.</button></div>
-  </div>`
-  : `<div class="swipe-actions">
+  <div class="swipe-actions">
     <button class="act toss" onclick="App.tossFrage()" aria-label="Toss">${ico('x')}<span>Toss</span></button>
     <button class="act like" onclick="App.decide('like')" aria-label="Like">${ico('thumb')}<span>Like</span></button>
     <button class="act take" onclick="App.decide('take')" aria-label="Take">${ico('heart')}<span>Take</span></button>
-  </div>`}`;
+  </div>`;
 }
 
 /* --- Nachsortieren nach der Migration --- */
@@ -1923,32 +2009,28 @@ function renderSorter() {
 function renderSeasonSorter() {
   const todo = DB.items.filter(i => i.seasonsAuto);
   if (!todo.length) {
-    return `<div class="card center">
-      <h2>Fertig</h2>
-      <p class="hint">Alle Jahreszeiten sind bestätigt.</p>
-      <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button>
-    </div>`;
+    return `<h1 class="grosstitel">Jahreszeiten</h1>
+    <div class="card leer"><div class="leer-ico">${ico('check')}</div><h2>Alles bestätigt</h2>
+      <p class="hint">Alle Teile haben bestätigte Jahreszeiten.</p>
+      <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button></div>`;
   }
   const it = todo[0];
+  const gesamt = DB.items.length;
   const gewaehlt = currentSeasonDraft(it);
-  return `<div class="card">
-    <h2>Jahreszeiten <span class="small">noch ${todo.length}</span></h2>
-    <p class="hint" style="margin:0 0 10px">Bisher nur aus der Wärme geraten. Mehrfachauswahl –
-    bestätige oder korrigiere.</p>
+  return `<h1 class="grosstitel">Jahreszeiten</h1>
+  <p class="untertitel">Noch ${todo.length} – bisher nur aus der Wärme geraten.</p>
+  <div class="fortschritt"><i style="width:${Math.round((gesamt - todo.length) * 100 / gesamt)}%"></i></div>
+  <div class="card">
     <div class="checker"><img data-pic="${it.picId}" alt=""></div>
-    <p class="center small" style="margin:8px 0 4px">${esc(it.name || '(ohne Namen)')}
-      · ${esc(CATS[it.cat].label)} · ${esc(WARMTH_LBL[it.warmth || 3])}</p>
+    <p class="center" style="margin:12px 0 4px; font-weight:600">${esc(it.name || '(ohne Namen)')}</p>
+    <p class="center small" style="margin:0 0 10px">${esc(CATS[it.cat].label)} · ${esc(WARMTH_LBL[it.warmth || 3])}</p>
     <div class="chips" style="justify-content:center">
       ${SEASONS.map(s => `<button class="chip ${gewaehlt.includes(s.key) ? 'active' : ''}"
         onclick="App.seasonToggle('${s.key}')">${ico(s.ico)} ${s.label}</button>`).join('')}
     </div>
-    <button class="btn primary block" style="margin-top:10px" onclick="App.seasonConfirm()"
+    <button class="btn primary block" style="margin-top:12px" onclick="App.seasonConfirm()"
       ${gewaehlt.length ? '' : 'disabled'}>Übernehmen und weiter</button>
-    ${gewaehlt.length ? '' : '<p class="small center">Mindestens eine Jahreszeit wählen.</p>'}
-    <div class="btn-row" style="margin-top:6px">
-      <button class="btn small" onclick="App.seasonSkip()">Später</button>
-      <button class="btn small" onclick="App.stopSort()">Abbrechen</button>
-    </div>
+    <button class="btn danger block" onclick="App.seasonSkip()">Später</button>
   </div>`;
 }
 /* Entwurf je Teil, damit Antippen nicht sofort speichert */
@@ -1963,84 +2045,86 @@ function currentSeasonDraft(it) {
 function renderCatSorter() {
   const todo = DB.items.filter(i => i.needsSort);
   if (!todo.length) {
-    return `<div class="card center">
-      <h2>Fertig</h2>
+    return `<h1 class="grosstitel">Nachsortieren</h1>
+    <div class="card leer"><div class="leer-ico">${ico('check')}</div><h2>Alles sortiert</h2>
       <p class="hint">Alle Teile haben jetzt eine Unterkategorie.</p>
-      <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button>
-    </div>`;
+      <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button></div>`;
   }
   const it = todo[0];
   const opts = SORT_OPTIONS[it.cat] || CAT_ORDER;
-  return `<div class="card">
-    <h2>Nachsortieren <span class="small">noch ${todo.length}</span></h2>
-    <p class="hint" style="margin:0 0 10px">Die alte Version kannte nur grobe Kategorien.
-    Tippe an, was es ist – das Teil wandert direkt weiter.</p>
+  return `<h1 class="grosstitel">Nachsortieren</h1>
+  <p class="untertitel">Noch ${todo.length} – tippe an, was es ist.</p>
+  <div class="card">
     <div class="checker"><img data-pic="${it.picId}" alt=""></div>
-    <p class="center small" style="margin:8px 0 12px">${esc(it.name || '(ohne Namen)')}</p>
-    ${opts.map(c => `<button class="btn block" style="margin-bottom:8px"
-      onclick="App.sortInto('${it.id}','${c}')">${CATS[c].label}</button>`).join('')}
-    <button class="btn block" style="margin-bottom:8px" onclick="App.editItem('${it.id}')">
-      ${ico('more')} Andere Kategorie …</button>
-    <div class="btn-row" style="margin-top:6px">
-      <button class="btn small" onclick="App.sortSkip('${it.id}')">Später</button>
-      <button class="btn small" onclick="App.stopSort()">Abbrechen</button>
+    <p class="center" style="margin:12px 0 12px; font-weight:600">${esc(it.name || '(ohne Namen)')}</p>
+    <div class="liste">
+      ${opts.map(c => `<button class="zeile-l ohne-ico" onclick="App.sortInto('${it.id}','${c}')">
+        <span class="ltext">${CATS[c].label}</span>${ico('chev', 'chev')}</button>`).join('')}
+      <button class="zeile-l ohne-ico" onclick="App.editItem('${it.id}')"><span class="ltext">Andere Kategorie …</span>${ico('chev', 'chev')}</button>
     </div>
+    <button class="btn danger block" style="margin-top:6px" onclick="App.sortSkip('${it.id}')">Später</button>
   </div>`;
 }
 
 function renderCloset() {
+  if (UI.closetFilter === '_ohneki' && !DB.items.some(i => !istAnalysiert(i))) UI.closetFilter = 'all';
   const f = UI.closetFilter;
-  const list = f === 'all' ? DB.items
-    : f === '_ohneki' ? DB.items.filter(i => !istAnalysiert(i))
-    : DB.items.filter(i => i.cat === f);
-  const sorted = [...list].sort((a, b) =>
-    CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (b.addedAt || 0) - (a.addedAt || 0));
   const counts = c => DB.items.filter(i => i.cat === c).length;
   const todo = needsSortCount();
   const stodo = seasonTodoCount();
-  return `${stodo ? `<div class="card accent">
-    <h2>${stodo} ${stodo === 1 ? 'Teil braucht' : 'Teile brauchen'} bestätigte Jahreszeiten</h2>
-    <p class="hint" style="margin:0 0 10px">Die Jahreszeiten sind bisher nur aus der Wärme abgeleitet.
-    Einmal durchgehen und bestätigen oder korrigieren – geht meist mit einem Tipp pro Teil.</p>
-    <button class="btn primary block" onclick="App.startSort('season')">Jahreszeiten durchgehen</button>
+  const ohneKi = DB.items.filter(i => !istAnalysiert(i)).length;
+  return `<h1 class="grosstitel">Schrank</h1>
+  ${stodo ? `<button class="banner" onclick="App.startSort('season')">
+    <span class="ico">${ico('leaf')}</span>
+    <span><b>${stodo} ${stodo === 1 ? 'Teil braucht' : 'Teile brauchen'} Jahreszeiten</b>
+    <span class="small">Einmal durchgehen und bestätigen</span></span>${ico('chev', 'chev')}</button>` : ''}
+  ${todo ? `<button class="banner" onclick="App.startSort()">
+    <span class="ico">${ico('layers')}</span>
+    <span><b>${todo} ${todo === 1 ? 'Teil braucht' : 'Teile brauchen'} eine Unterkategorie</b>
+    <span class="small">Aus der alten Version übernommen</span></span>${ico('chev', 'chev')}</button>` : ''}
+  ${DB.items.length ? `<div class="suche">${ico('search')}<input type="search" placeholder="Im Schrank suchen"
+      value="${esc(UI.suche || '')}" oninput="App.suche(this.value)" enterkeyhint="search"></div>
+  <div class="chips zeile">
+    <button class="chip ${f === 'all' ? 'active' : ''}" onclick="App.filterCloset('all')">Alle <span class="zahl">${DB.items.length}</span></button>
+    ${ohneKi && ohneKi < DB.items.length
+      ? `<button class="chip ${f === '_ohneki' ? 'active' : ''}" onclick="App.filterCloset('_ohneki')">ohne KI <span class="zahl">${ohneKi}</span></button>` : ''}
+    ${CAT_ORDER.filter(c => counts(c)).map(c =>
+      `<button class="chip ${f === c ? 'active' : ''}" onclick="App.filterCloset('${c}')">${CATS[c].kurz} <span class="zahl">${counts(c)}</span></button>`).join('')}
   </div>` : ''}
-  ${todo ? `<div class="card accent">
-    <h2>${todo} ${todo === 1 ? 'Teil braucht' : 'Teile brauchen'} eine Unterkategorie</h2>
-    <p class="hint" style="margin:0 0 10px">Aus der alten Version übernommen: Oberteile sind noch nicht in
-    Tops, Strick und Blusen getrennt, Röcke stecken bei den Hosen, Taschen bei den Accessoires.</p>
-    <button class="btn primary block" onclick="App.startSort()">Jetzt nachsortieren</button>
-  </div>` : ''}
-  <div class="card">
-    <div class="btn-row">
-      <button class="btn primary" onclick="App.addItem('camera')">${ico('camera')} Foto machen</button>
-      <button class="btn" onclick="App.addItem('library')">${ico('image')} Aus Fotos</button>
-      <button class="btn" onclick="App.pasteItem()">${ico('paste')} Einfügen</button>
-    </div>
-    <p class="small" style="margin:8px 0 0">Auf dem iPhone: Teil in der Fotos-App lange antippen →
-    <b>Motiv kopieren</b> → hier auf <b>Einfügen</b>.</p>
-  </div>
-  <div class="card">
-    <div class="chips">
-      <button class="chip ${f === 'all' ? 'active' : ''}" onclick="App.filterCloset('all')">Alle ${DB.items.length}</button>
-      ${(() => { const n = DB.items.filter(i => !istAnalysiert(i)).length;
-        return n && n < DB.items.length
-          ? `<button class="chip ${f === '_ohneki' ? 'active' : ''}" onclick="App.filterCloset('_ohneki')">ohne KI ${n}</button>` : ''; })()}
-      ${CAT_ORDER.filter(c => counts(c)).map(c =>
-        `<button class="chip ${f === c ? 'active' : ''}" onclick="App.filterCloset('${c}')">${CATS[c].kurz} ${counts(c)}</button>`).join('')}
-    </div>
-    ${sorted.length ? `<div class="grid">${sorted.map(it => tileHTML(it)).join('')}</div>`
-      : '<p class="hint">Noch nichts in dieser Kategorie.</p>'}
+  <div id="schrank-grid">${schrankGridHTML()}</div>`;
+}
+
+/* Raster getrennt, damit die Suche nur das Raster neu zeichnet – sonst
+   verliert das Suchfeld bei jedem Buchstaben den Fokus */
+function schrankGridHTML() {
+  if (!DB.items.length) return `<div class="card leer">
+    <div class="leer-ico">${ico('closet')}</div>
+    <h2>Dein Schrank ist leer</h2>
+    <p class="hint">Fotografiere dein erstes Teil. Am schönsten wird es, wenn du es in der
+    Fotos-App freistellst: lange antippen, <b>Motiv kopieren</b>, hier einfügen.</p>
+    <button class="btn primary block" onclick="App.aktion('neu')">${ico('plus')} Erstes Teil hinzufügen</button>
   </div>`;
+  const f = UI.closetFilter;
+  const q = (UI.suche || '').trim().toLowerCase();
+  let list = f === 'all' ? DB.items
+    : f === '_ohneki' ? DB.items.filter(i => !istAnalysiert(i))
+    : DB.items.filter(i => i.cat === f);
+  if (q) list = list.filter(i => ((i.name || '') + ' ' + CATS[i.cat].label).toLowerCase().includes(q));
+  const sorted = [...list].sort((a, b) =>
+    CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (b.addedAt || 0) - (a.addedAt || 0));
+  if (!sorted.length) return `<p class="hint center" style="margin-top:30px">${q ? `Nichts gefunden für „${esc(UI.suche.trim())}".` : 'Noch nichts in dieser Kategorie.'}</p>`;
+  const ungenutzt = sorted.some(it => istUngenutzt(it.id));
+  return `<p class="zaehler">${sorted.length} ${sorted.length === 1 ? 'Teil' : 'Teile'}</p>
+    <div class="grid">${sorted.map(it => tileHTML(it)).join('')}</div>
+    ${ungenutzt ? '<div class="legende"><span><i style="background:var(--red)"></i>noch in keinem Outfit</span></div>' : ''}`;
 }
 function tileHTML(it, onclick) {
   /* Nur echte Strings zählen: bei map(tileHTML) käme sonst der Index als onclick an */
   const action = typeof onclick === 'string' ? onclick : `App.editItem('${it.id}')`;
-  return `<div class="tile" onclick="${action}">
+  return `<div class="tile" role="button" onclick="${action}">
     ${it.needsSort ? '<span class="dot" title="Unterkategorie fehlt"></span>' : ''}
     ${istUngenutzt(it.id) ? '<span class="flag" title="In keiner gemerkten Kombination"></span>' : ''}
     <div class="thumbwrap"><img data-pic="${it.picId}" alt="${esc(it.name || '')}"></div>
-    <div class="swatches">${(it.colors || []).map(c =>
-      `<span class="sw" style="background:${esc(c)}"></span>`).join('')}</div>
     <div class="cap">${esc(it.name || CATS[it.cat].label)}</div>
   </div>`;
 }
@@ -2052,39 +2136,33 @@ function renderOutfits() {
   list.sort(UI.outSort === 'saison'
     ? (x, y) => (TAG_ORDER[outfitTag(x)] - TAG_ORDER[outfitTag(y)]) || (y.date || '').localeCompare(x.date || '')
     : (x, y) => (y.date || '').localeCompare(x.date || ''));
-
   const gefiltert = UI.outFilter ? itemById(UI.outFilter) : null;
   const zaehl = k => DB.outfits.filter(o => outfitTag(o) === k).length;
-  return `<div class="card kompakt">
-    <div class="btn-row" style="justify-content:space-between; margin-bottom:8px">
-      <b>Deine Outfits <span class="small">${list.length}${list.length !== DB.outfits.length ? ' / ' + DB.outfits.length : ''}</span></b>
-      <button class="btn small primary" onclick="App.newOutfit()">+ Eigene</button>
-    </div>
-    ${DB.outfits.length ? `<div class="chips tight">
-      <button class="chip mini ${UI.outSort === 'neu' ? 'active' : ''}" onclick="App.setOutSort('neu')">Neueste</button>
-      <button class="chip mini ${UI.outSort === 'saison' ? 'active' : ''}" onclick="App.setOutSort('saison')">Saison</button>
-      <span class="trenner"></span>
-      <button class="chip mini ${UI.outTagFilter === 'all' ? 'active' : ''}" onclick="App.setOutTag('all')">Alle</button>
-      ${OUTFIT_TAGS.filter(t => zaehl(t.key)).map(t =>
-        `<button class="chip mini ${UI.outTagFilter === t.key ? 'active' : ''}"
-          onclick="App.setOutTag('${t.key}')" title="${esc(t.label)}">${ico(t.ico)} ${zaehl(t.key)}</button>`).join('')}
-      <span class="trenner"></span>
-      ${gefiltert
-        ? `<button class="chip mini active" onclick="App.clearOutFilter()">${esc((gefiltert.name || CATS[gefiltert.cat].label).slice(0, 14))} ${ico('x')}</button>`
-        : '<button class="chip mini" onclick="App.pickOutFilter()">Teil filtern …</button>'}
-    </div>` : ''}
+  if (!DB.outfits.length) return `<h1 class="grosstitel">Outfits</h1>
+    <div class="card leer"><div class="leer-ico">${ico('heart')}</div>
+      <h2>Noch keine Outfits</h2>
+      <p class="hint">Wische unter <i>Heute</i> nach rechts, um ein Outfit zu merken – oder stell selbst eines zusammen.</p>
+      <button class="btn primary block" onclick="App.newOutfit()">${ico('plus')} Eigene Kombination</button></div>`;
+  return `<h1 class="grosstitel">Outfits</h1>
+  <div class="chips zeile">
+    <button class="chip ${UI.outTagFilter === 'all' ? 'active' : ''}" onclick="App.setOutTag('all')">Alle <span class="zahl">${DB.outfits.length}</span></button>
+    ${OUTFIT_TAGS.filter(t => zaehl(t.key)).map(t =>
+      `<button class="chip ${UI.outTagFilter === t.key ? 'active' : ''}" onclick="App.setOutTag('${t.key}')">${ico(t.ico)} ${esc(t.label)} <span class="zahl">${zaehl(t.key)}</span></button>`).join('')}
+    <span class="trenner"></span>
+    ${gefiltert
+      ? `<button class="chip active" onclick="App.clearOutFilter()">${esc((gefiltert.name || CATS[gefiltert.cat].label).slice(0, 18))} ${ico('x')}</button>`
+      : `<button class="chip" onclick="App.pickOutFilter()">${ico('search')} Mit Teil …</button>`}
   </div>
+  ${segHTML('outsort', [['neu', 'Neueste'], ['saison', 'Nach Saison']], UI.outSort, 'App.setOutSort')}
   ${list.length ? `<div class="ogrid">${list.map(o => {
       const items = o.ids.map(itemById).filter(Boolean);
-      return `<div class="ocell" onclick="App.openOutfit('${o.id}')">
+      return `<div class="ocell" role="button" onclick="App.openOutfit('${o.id}')">
         ${items.length ? collageHTML(items, { klein: true, tag: outfitTag(o) })
           : '<div class="collage klein empty"><span>leer</span></div>'}
         ${o.name ? `<div class="ocap">${esc(o.name)}</div>` : ''}
       </div>`;
     }).join('')}</div>`
-    : `<div class="card"><p class="hint">${DB.outfits.length
-        ? 'Kein Outfit passt zu diesem Filter.'
-        : 'Noch nichts gesammelt. Im Reiter <i>Heute</i> nach rechts wischen – oder oben selbst eine Kombination bauen.'}</p></div>`}`;
+    : `<p class="hint center" style="margin-top:30px">Kein Outfit passt zu diesem Filter.</p>`}`;
 }
 
 function renderDetail() {
@@ -2097,25 +2175,24 @@ function renderDetail() {
   return `<div class="overlay" onclick="App.closeOutfit()"><div class="sheet" onclick="event.stopPropagation()">
     <div class="sheet-head">
       <h2>${o.name ? esc(o.name) : 'Outfit'}</h2>
-      <button class="btn small" onclick="App.closeOutfit()">Schließen</button>
+      <button class="zu" onclick="App.closeOutfit()" aria-label="Schließen">${ico('x')}</button>
     </div>
     ${items.length ? collageHTML(items, { tag, tagLabel: true })
       : '<p class="hint">Alle Teile dieses Outfits wurden inzwischen gelöscht.</p>'}
-    <p class="small" style="margin:10px 0 6px">${items.map(it =>
-      esc(it.name || CATS[it.cat].label)).join(' · ') || '–'}</p>
+    <div class="teileleiste">${items.map(it => tileHTML(it, `App.teilAusOutfit(&#39;${it.id}&#39;)`)).join('')}</div>
     ${fehlend ? `<p class="warn">${fehlend} ${fehlend === 1 ? 'Teil ist' : 'Teile sind'} nicht mehr im Schrank.</p>` : ''}
-    <span class="worldtags">${worlds.length
-      ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
-      : '<span class="wtag">nur Neutral</span>'}</span>
-    <h3>Kategorie</h3>
+    <h3 class="abschnitt" style="margin-left:0">Kategorie</h3>
     <div class="chips">
       ${OUTFIT_TAGS.map(t => `<button class="chip ${tag === t.key ? 'active' : ''}"
         onclick="App.setOutfitTag('${o.id}','${t.key}')">${ico(t.ico)} ${esc(t.label)}</button>`).join('')}
     </div>
-    <p class="small">${o.own ? 'Selbst gebaut' : 'Gemerkt'} · ${fmtDate(o.date)}</p>
-    <div class="btn-row" style="margin-top:10px">
-      <button class="btn" onclick="App.editOutfit('${o.id}')">Bearbeiten</button>
-      <button class="btn danger" onclick="App.delOutfit('${o.id}')">Löschen</button>
+    <span class="worldtags" style="margin-top:6px">${worlds.length
+      ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
+      : '<span class="wtag">nur Neutral</span>'}</span>
+    <p class="meta">${o.own ? 'Selbst gebaut' : 'Gemerkt'} · ${fmtDate(o.date)}</p>
+    <div class="sheet-fuss">
+      <button class="btn primary block" onclick="App.editOutfit('${o.id}')">${ico('pencil')} Bearbeiten</button>
+      <button class="btn danger block" onclick="App.delOutfit('${o.id}')">Outfit löschen</button>
     </div>
   </div></div>`;
 }
@@ -2125,22 +2202,21 @@ function slotRowHTML(slot, b) {
   const locked = b.locked || [];
   const gewaehlt = b.ids.map(itemById).filter(it => it && slot.cats.includes(it.cat));
   const max = slot.max || 1;
-  const label = !gewaehlt.length ? 'wählen' : gewaehlt.length < max ? '+ weiteres' : 'ändern';
-  return `<div class="slot">
-    <div class="slot-head">
-      <span class="slot-label">${esc(slot.label)}</span>
-      <button class="btn small" onclick="App.pickSlot('${slot.key}')">${label}</button>
-    </div>
-    ${gewaehlt.map(it => {
-      const fix = locked.includes(it.id);
-      return `<div class="slot-item${fix ? ' fixiert' : ''}">
-        <img data-pic="${it.picId}" alt=""><span>${esc(it.name || CATS[it.cat].label)}</span>
-        <button class="mini ${fix ? 'on' : ''}" onclick="App.toggleLock('${it.id}')"
-          aria-label="${fix ? 'Fixierung lösen' : 'Fixieren'}">${ico(fix ? 'lock' : 'unlock')}</button>
-        <button class="mini" onclick="App.unpick('${it.id}')" aria-label="Entfernen">${ico('x')}</button>
-      </div>`;
-    }).join('')}
-  </div>`;
+  const zeilen = gewaehlt.map(it => {
+    const fix = locked.includes(it.id);
+    return `<div class="zeile-l" role="button" onclick="App.pickSlot('${slot.key}')">
+      <img data-pic="${it.picId}" alt="">
+      <span class="ltext">${esc(it.name || CATS[it.cat].label)}<small>${esc(slot.label)}${fix ? ' · fixiert' : ''}</small></span>
+      <button class="mini ${fix ? 'on' : ''}" onclick="event.stopPropagation(); App.toggleLock('${it.id}')"
+        aria-label="${fix ? 'Fixierung lösen' : 'Fixieren'}">${ico(fix ? 'lock' : 'unlock')}</button>
+      <button class="mini" onclick="event.stopPropagation(); App.unpick('${it.id}')" aria-label="Entfernen">${ico('x')}</button>
+    </div>`;
+  });
+  if (gewaehlt.length < max) zeilen.push(`<button class="zeile-l" onclick="App.pickSlot('${slot.key}')">
+      <span class="lico hell">${ico('plus')}</span>
+      <span class="ltext">${esc(slot.label)}${gewaehlt.length ? ' – weiteres' : ''}</span>
+      <span class="lwert">wählen</span>${ico('chev', 'chev')}</button>`);
+  return zeilen.join('');
 }
 
 /* Fixierte Teile geben die Jahreszeit vor: wer Shorts fixiert, will kein Winteroutfit. */
@@ -2160,39 +2236,31 @@ function renderBuilder() {
   const worlds = outfitWorlds(items);
   const seasons = outfitSeasons(items);
   const zuBunt = worlds.length > MAX_WORLDS;
-  return `<div class="card">
-    <div class="sheet-head">
-      <h2>${b.editId ? 'Outfit bearbeiten' : 'Eigene Kombination'}</h2>
-      <button class="btn small" onclick="App.closeBuilder()">Abbrechen</button>
-    </div>
-    ${items.length ? collageHTML(items)
-      : '<div class="collage empty"><span>Wähle unten die Teile aus</span></div>'}
-    <div class="btn-row" style="margin-top:12px">
-      <button class="btn" onclick="App.rollRest()">${ico('dice')} Rest würfeln</button>
-      <span class="small">${b.locked && b.locked.length
-        ? b.locked.length + (b.locked.length === 1 ? ' Teil bleibt fix' : ' Teile bleiben fix')
-        : 'Teil mit dem Schloss fixieren, dann würfeln'}</span>
-    </div>
-    <p class="small" style="margin:6px 0 0">Gewürfelt wird für
-      <b>${esc(SEASONS.find(s => s.key === builderSeason()).label)}</b>${builderSeason() !== UI.season
-        ? ' – aus den fixierten Teilen abgeleitet' : ' (oben unter <i>Heute</i> umstellbar)'}.</p>
-    <div class="slots">${SLOTS.map(s => slotRowHTML(s, b)).join('')}</div>
-    <label class="fld" style="margin-top:14px">Name (optional)
-      <input type="text" value="${esc(b.name || '')}" placeholder="z. B. Bürotag im Herbst"
-        oninput="App.builderName(this.value)">
-    </label>
-    <div class="worldtags" style="margin-bottom:8px">
-      ${seasons.length ? seasons.map(k =>
-        `<span class="wtag">${ico(SEASONS.find(s => s.key === k).ico)} ${SEASONS.find(s => s.key === k).label}</span>`).join('')
-        : '<span class="wtag">keine gemeinsame Jahreszeit</span>'}
-      ${worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')}
-    </div>
-    ${zuBunt ? `<p class="warn">${worlds.length} bunte Farbwelten – über deiner Regel von ${MAX_WORLDS}.
-      Speichern geht trotzdem, automatisch vorgeschlagen würde diese Kombination aber nicht.</p>` : ''}
-    <button class="btn primary block" style="margin-top:6px" onclick="App.saveOutfit()"
-      ${items.length < 2 ? 'disabled' : ''}>Speichern</button>
-    ${items.length < 2 ? '<p class="small center">Mindestens zwei Teile auswählen.</p>' : ''}
-  </div>`;
+  return `<h1 class="grosstitel">${b.editId ? 'Bearbeiten' : 'Kombination'}</h1>
+  <div class="baukasten">${items.length ? collageHTML(items)
+      : '<div class="collage empty"><span>Wähle unten die Teile aus</span></div>'}</div>
+  <div class="btn-row" style="margin:14px 0 4px">
+    <button class="btn" onclick="App.rollRest()">${ico('dice')} Rest würfeln</button>
+    <span class="small" style="flex:1">${b.locked.length
+      ? b.locked.length + (b.locked.length === 1 ? ' Teil bleibt fix' : ' Teile bleiben fix')
+      : 'Mit dem Schloss fixieren, dann würfeln'} · für ${esc(SEASONS.find(s => s.key === builderSeason()).label)}</span>
+  </div>
+  <h3 class="abschnitt">Teile</h3>
+  <div class="liste">${SLOTS.map(s => slotRowHTML(s, b)).join('')}</div>
+  <h3 class="abschnitt">Name</h3>
+  <input type="text" value="${esc(b.name || '')}" placeholder="optional, z. B. Bürotag im Herbst"
+    oninput="App.builderName(this.value)" style="background:var(--surface); box-shadow:var(--shadow-1)">
+  <div class="worldtags" style="margin:12px 0 8px">
+    ${seasons.length ? seasons.map(k =>
+      `<span class="wtag">${ico(SEASONS.find(s => s.key === k).ico)} ${SEASONS.find(s => s.key === k).label}</span>`).join('')
+      : '<span class="wtag">keine gemeinsame Jahreszeit</span>'}
+    ${worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')}
+  </div>
+  ${zuBunt ? `<p class="warn">${worlds.length} bunte Farbwelten – über deiner Regel von ${MAX_WORLDS}.
+    Speichern geht trotzdem, vorgeschlagen würde die Kombination aber nicht.</p>` : ''}
+  <button class="btn primary block" style="margin-top:10px" onclick="App.saveOutfit()"
+    ${items.length < 2 ? 'disabled' : ''}>Speichern</button>
+  ${items.length < 2 ? '<p class="small center">Mindestens zwei Teile auswählen.</p>' : ''}`;
 }
 
 const trendLabel = g => g < 0.2 ? 'mein Stil' : g < 0.42 ? 'eher mein Stil'
@@ -2201,95 +2269,97 @@ const trendLabel = g => g < 0.2 ? 'mein Stil' : g < 0.42 ? 'eher mein Stil'
 function renderTrends() {
   const t = DB.trends;
   const worlds = [...trendWorlds()];
-  return `<div class="card">
-    <h2>Trends</h2>
-    <p class="hint">Pinterest lässt sich technisch nicht direkt anzapfen – die API braucht eine
-    freigegebene Server-App, und Safari blockiert den direkten Zugriff. Der Weg, der funktioniert:</p>
-    <ol class="hint" style="margin:8px 0 12px; padding-left:20px">
-      <li>Pin in Pinterest öffnen → Teilen → <b>Bild sichern</b></li>
-      <li>Hier unten auf <b>Aus Fotos</b> und den Pin auswählen</li>
-    </ol>
-    <div class="btn-row">
-      <button class="btn primary" onclick="App.addTrend('library')">${ico('image')} Aus Fotos</button>
-      <button class="btn" onclick="App.pasteTrend()">${ico('paste')} Einfügen</button>
+  const p = DB.profil;
+  const liste = (titel, arr, map) => arr && arr.length
+    ? `<h3>${titel}</h3><span class="worldtags">${arr.map(x =>
+        `<span class="wtag">${esc(map ? map[x].label : x)}</span>`).join('')}</span>` : '';
+  const punkte = (titel, arr) => arr && arr.length
+    ? `<h3>${titel}</h3><ul>${arr.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '';
+  return `<h1 class="grosstitel">Trends</h1>
+  ${p ? `<div class="profil">
+    <div class="quelle">${ico('sparkle')} Dein Stil</div>
+    <blockquote>${esc(p.aesthetik)}</blockquote>
+    ${liste('Stil', p.stil)}
+    ${UI.profilOffen ? `
+    ${liste('Silhouetten', p.silhouetten, SILHOUETTEN)}
+    ${liste('Materialien', p.materialien, MATERIALIEN)}
+    ${p.farbregeln ? `<h3>Farben</h3><ul><li>${esc(p.farbregeln)}</li></ul>` : ''}
+    ${punkte('So kombinierst du', p.stylingregeln)}
+    ${punkte('Vermeiden', p.vermeiden)}
+    <h3>Gewichtung</h3>
+    <div class="slider-row">
+      <input type="range" min="0" max="1" step="0.05" value="${UI.trendGewicht}"
+        oninput="App.setTrendGewicht(+this.value)">
+      <span class="val" data-out="trendGewicht">${trendLabel(UI.trendGewicht)}</span>
     </div>
-  </div>
-  <div class="card">
-    <h3>Stilprofil</h3>
-    ${(() => {
-      const p = DB.profil;
-      if (!p) return `<p class="hint" style="margin:0 0 10px">Aus deinen Pins liest die KI heraus,
-        worauf dein Geschmack zielt – Silhouetten, Materialien, Farbbeziehungen – und übersetzt
-        das in Regeln für die Vorschläge. Dafür braucht es mindestens drei Pins.</p>
-        <button class="btn primary block" onclick="App.profilErstellen()"
-          ${t.length >= 3 ? '' : 'disabled'}>${ico('sparkle')} Stilprofil erstellen</button>
-        ${t.length < 3 ? '<p class="small">Noch ' + (3 - t.length) + ' Pins nötig.</p>' : ''}`;
-      const liste = (titel, arr, map) => arr && arr.length
-        ? `<h3>${titel}</h3><span class="worldtags">${arr.map(x =>
-            `<span class="wtag">${esc(map ? map[x].label : x)}</span>`).join('')}</span>` : '';
-      return `<p class="hint" style="margin:0 0 12px">${esc(p.aesthetik)}</p>
-        ${liste('Stil', p.stil)}
-        ${liste('Silhouetten', p.silhouetten, SILHOUETTEN)}
-        ${liste('Materialien', p.materialien, MATERIALIEN)}
-        ${p.farbregeln ? `<h3>Farben</h3><p class="small">${esc(p.farbregeln)}</p>` : ''}
-        ${p.stylingregeln && p.stylingregeln.length ? `<h3>So kombinierst du</h3>
-          <ul class="small" style="margin:0 0 10px; padding-left:18px">
-            ${p.stylingregeln.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : ''}
-        ${p.vermeiden && p.vermeiden.length ? `<h3>Vermeiden</h3>
-          <ul class="small" style="margin:0 0 10px; padding-left:18px">
-            ${p.vermeiden.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : ''}
-        <label class="fld" style="margin-top:14px">Gewichtung
-          <div class="slider-row">
-            <input type="range" min="0" max="1" step="0.05" value="${UI.trendGewicht}"
-              oninput="App.setTrendGewicht(+this.value)">
-            <span class="val" data-out="trendGewicht">${trendLabel(UI.trendGewicht)}</span>
-          </div>
-        </label>
-        <div class="btn-row">
-          <button class="btn small" onclick="App.profilErstellen()">Neu erstellen</button>
-          <button class="btn small danger" onclick="App.profilLoeschen()">Entfernen</button>
-        </div>
-        <p class="small" style="margin-top:8px">Aus ${p.pins} Pins · ${fmtDate(p.erstellt)}</p>`;
-    })()}
-  </div>
-  ${worlds.length ? `<div class="card">
-    <h3>Deine aktuellen Farbwelten</h3>
-    <span class="worldtags">${worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')}</span>
-    <p class="small" style="margin:10px 0 0">Outfits in diesen Welten werden bei den Vorschlägen bevorzugt.</p>
-  </div>` : ''}
-  <div class="card">
-    <h3>Gesammelte Pins ${t.length ? '· ' + t.length : ''}</h3>
-    ${t.length ? `<div class="grid">${t.map(x => `<div class="tile" onclick="App.delTrend('${x.id}')">
-        <div class="thumbwrap plain"><img data-pic="${x.picId}" alt=""></div>
-        <div class="swatches">${(x.colors || []).map(c => `<span class="sw" style="background:${esc(c)}"></span>`).join('')}</div>
-      </div>`).join('')}</div>
-      <p class="small" style="margin:10px 0 0">Zum Löschen antippen.</p>`
-      : '<p class="hint">Noch keine Pins gesammelt.</p>'}
-  </div>`;
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn small" onclick="App.profilErstellen()">${ico('again')} Neu erstellen</button>
+      <button class="btn small danger" onclick="App.profilLoeschen()">Entfernen</button>
+    </div>
+    <p class="small" style="margin:10px 0 0">Aus ${p.pins} Pins · ${fmtDate(p.erstellt)}</p>
+    <button class="linkbtn hell" onclick="App.profilZu()">Weniger anzeigen</button>`
+    : `<button class="linkbtn hell" onclick="App.profilAuf()">Regeln und Gewichtung ${ico('chevdown')}</button>`}
+  </div>` : `<div class="card leer">
+    <div class="leer-ico">${ico('sparkle')}</div>
+    <h2>Dein Stilprofil</h2>
+    <p class="hint">Aus deinen Pins liest die KI heraus, worauf dein Geschmack zielt – Silhouetten,
+    Materialien, Farben – und übersetzt das in Regeln für die Vorschläge.</p>
+    <button class="btn primary block" onclick="App.profilErstellen()" ${t.length >= 3 ? '' : 'disabled'}>${ico('sparkle')} Stilprofil erstellen</button>
+    ${t.length < 3 ? `<p class="small">Noch ${3 - t.length} ${3 - t.length === 1 ? 'Pin' : 'Pins'} nötig.</p>` : ''}
+  </div>`}
+  ${worlds.length ? `<h3 class="abschnitt">Deine Farbwelten</h3>
+    <span class="worldtags" style="margin:0 4px">${worlds.map(w => `<span class="wtag" style="background:var(--surface)">${esc(WORLD_LBL[w])}</span>`).join('')}</span>` : ''}
+  <h3 class="abschnitt">Gesammelte Pins${t.length ? ' · ' + t.length : ''}</h3>
+  ${t.length ? `<div class="pins">${t.map(x => `<div class="pin" role="button" onclick="App.delTrend('${x.id}')">
+      <img data-pic="${x.picId}" alt="">
+      ${(x.colors || []).length ? `<div class="swatches">${x.colors.map(c => `<span class="sw" style="background:${esc(c)}"></span>`).join('')}</div>` : ''}
+    </div>`).join('')}</div>
+    <p class="small center" style="margin:6px 0 0">Antippen zum Entfernen.</p>`
+    : `<div class="card leer"><div class="leer-ico">${ico('trends')}</div><h2>Noch keine Pins</h2>
+      <p class="hint">Sammle Looks, die dir gefallen. Die App liest ihre Farben und bevorzugt sie in den Vorschlägen.</p>
+      <button class="btn primary block" onclick="App.aktion('pin')">${ico('plus')} Pin hinzufügen</button></div>`}`;
 }
 
 function renderData() {
-  const n = DB.items.length;
-  return `<div class="card">
-    <h2>Daten</h2>
-    <p class="hint">Alles liegt auf diesem Gerät: ${n} ${n === 1 ? 'Teil' : 'Teile'}, ${DB.trends.length} Pins,
-    ${DB.outfits.length} gemerkte Outfits.</p>
-    <p class="small" id="usage" onclick="App.tippSpeicher()">Speicher wird ermittelt …</p>
-    ${entwicklermodus() ? '<p class="small">Entwicklereinstellungen sichtbar. Fünfmal auf die Speicherzeile tippen blendet sie wieder aus.</p>' : ''}
+  const offen = DB.items.filter(i => !istAnalysiert(i)).length;
+  const zeile = (aufruf, icon, farbe, text, klein, extra = '') =>
+    `<button class="zeile-l" onclick="${aufruf}"><span class="lico ${farbe}">${ico(icon)}</span>
+      <span class="ltext">${text}${klein ? `<small>${klein}</small>` : ''}</span>${extra || ico('chev', 'chev')}</button>`;
+  return `<h1 class="grosstitel">Daten</h1>
+  <div class="kennzahlen">
+    <div class="kennzahl"><b>${DB.items.length}</b><span>Teile</span></div>
+    <div class="kennzahl"><b>${DB.outfits.length}</b><span>Outfits</span></div>
+    <div class="kennzahl"><b>${DB.trends.length}</b><span>Pins</span></div>
   </div>
+  <p class="small" style="margin:8px 4px 0">Alles liegt auf diesem Gerät.
+    <span id="usage" onclick="App.tippSpeicher()">Speicher wird ermittelt …</span></p>
+  ${entwicklermodus() ? '<p class="small" style="margin:4px">Entwicklereinstellungen sichtbar – fünfmal auf die Speicherangabe tippen blendet sie aus.</p>' : ''}
+
+  <h3 class="abschnitt">Sichern</h3>
+  <div class="liste">
+    ${zeile('App.exportData(true)', 'download', '', 'Backup mit Bildern', 'Vollständig – zum Umziehen oder Aufbewahren')}
+    ${zeile('App.exportData(false)', 'download', 'hell', 'Nur Daten', 'Klein, ohne Fotos')}
+    ${zeile('App.chooseImport()', 'upload', 'hell', 'Backup einlesen', 'Führt zusammen, überschreibt nichts Bestätigtes')}
+  </div>
+
+  <h3 class="abschnitt">Stilanalyse</h3>
+  <div class="liste">
+    ${zeile('App.analyseAlle()', 'sparkle', 'akzent', offen ? 'Teile analysieren' : 'Alle Teile analysiert',
+      !dienstUrl() ? 'Zurzeit nicht verfügbar'
+        : offen ? `${offen} von ${DB.items.length} ohne Silhouette, Material und Muster` : 'Silhouette, Material und Muster sind erkannt',
+      offen && dienstUrl() ? '' : ico('check', 'chev'))}
+    ${kiMeldung ? `<div class="zeile-l ohne-ico"><span class="ltext small" id="ki-fortschritt">${esc(kiMeldung)}</span>
+      <button class="btn small" onclick="App.analyseStopp()">Anhalten</button></div>` : '<span id="ki-fortschritt" hidden></span>'}
+  </div>
+
+  <h3 class="abschnitt">Speicher</h3>
+  <div class="liste">
+    ${zeile('App.optimize()', 'shrink', 'hell', 'Bilder verkleinern', 'Spart Platz, die Collage bleibt scharf')}
+  </div>
+  <p class="small" id="optout" style="margin:4px"></p>
+
+  ${entwicklermodus() ? `<h3 class="abschnitt">KI-Dienst</h3>
   <div class="card">
-    <h3>Sichern</h3>
-    <div class="btn-row">
-      <button class="btn primary" onclick="App.exportData(true)">Export mit Bildern</button>
-      <button class="btn" onclick="App.exportData(false)">Nur Daten</button>
-    </div>
-    <h3>Zurückholen</h3>
-    <button class="btn block" onclick="App.chooseImport()">Backup einlesen</button>
-  </div>
-  ${entwicklermodus() ? `<div class="card">
-    <h3>KI-Dienst</h3>
-    <p class="hint" style="margin:0 0 10px">Adresse deines Cloudflare Workers. Der Gemini-Schlüssel
-    liegt dort, nicht in der App.</p>
     <label class="fld">Worker-Adresse
       <input type="text" value="${esc((DB.prefs && DB.prefs.worker) || '')}"
         placeholder="https://outfit-ki.dein-konto.workers.dev"
@@ -2306,35 +2376,11 @@ function renderData() {
       ${kiZeigeDetail ? `<pre class="detail">${esc(kiDetail)}</pre>` : ''}
     </div>` : ''}
   </div>` : ''}
-  <div class="card">
-    <h3>Teile analysieren</h3>
-    <p class="hint" style="margin:0 0 10px">${(() => {
-      const offen = DB.items.filter(i => !istAnalysiert(i)).length;
-      if (!dienstUrl()) return 'Die Stilanalyse ist zurzeit nicht verfügbar.';
-      return offen
-        ? `${offen} von ${DB.items.length} Teilen haben noch keine Stilmerkmale.
-           Die Analyse erkennt Silhouette, Material und Muster – damit werden die Vorschläge
-           deutlich treffsicherer. Bricht sie ab, macht sie beim nächsten Mal dort weiter.`
-        : 'Alle Teile sind analysiert.';
-    })()}</p>
-    <div class="btn-row">
-      <button class="btn" onclick="App.analyseAlle()"
-        ${DB.items.some(i => !istAnalysiert(i)) && dienstUrl() ? '' : 'disabled'}>${ico('sparkle')} Analyse starten</button>
-      <button class="btn small" onclick="App.analyseStopp()">Anhalten</button>
-    </div>
-    <p class="small" id="ki-fortschritt">${esc(kiMeldung)}</p>
-  </div>
-  <div class="card">
-    <h3>Bilder verkleinern</h3>
-    <p class="hint" style="margin:0 0 10px">Rechnet alle gespeicherten Bilder neu und kleiner.
-    Spart deutlich Platz, die Qualität reicht für die Collage weiterhin. Dauert bei vielen Teilen
-    ein bis zwei Minuten.</p>
-    <button class="btn block" onclick="App.optimize()">Jetzt verkleinern</button>
-    <p class="small" id="optout"></p>
-  </div>
-  <div class="card">
-    <h3>Aufräumen</h3>
-    <button class="btn danger block" onclick="App.wipe()">Alles löschen</button>
+
+  <h3 class="abschnitt">Aufräumen</h3>
+  <div class="liste">
+    <button class="zeile-l rot" onclick="App.wipe()"><span class="lico rot">${ico('trash')}</span>
+      <span class="ltext">Alles löschen</span></button>
   </div>`;
 }
 
@@ -2346,17 +2392,17 @@ function renderStudio() {
   return `<div class="overlay"><div class="sheet" onclick="event.stopPropagation()">
     <div class="sheet-head">
       <h2>Studio</h2>
-      <button class="btn small" onclick="App.studioCancel()">Abbrechen</button>
+      <button class="zu" onclick="App.studioCancel()" aria-label="Abbrechen">${ico('x')}</button>
     </div>
     <div class="studio-stage">
       ${laedt ? '<div class="studio-laden"><span class="spin"></span><span>Modell wird geladen …</span></div>'
               : '<canvas id="studio-cv"></canvas>'}
     </div>
-    <p class="small center" style="margin:8px 0 2px">${
-      s.status === 'ki' ? 'Freigestellt per Modell – die Pixel des Teils bleiben unverändert.'
+    <p class="small center" style="margin:10px 0 4px">${
+      s.status === 'ki' ? 'Freigestellt – die Pixel des Teils bleiben unverändert.'
       : s.status === 'alpha' ? 'Bereits freigestellt – nur Licht und Zuschnitt werden angepasst.'
       : s.status === 'laden' ? 'Beim ersten Mal werden 15 MB geladen, danach läuft es offline.'
-      : 'Modell nicht verfügbar – einfacher Freisteller über Farbe und Kanten.'}</p>
+      : 'Einfacher Freisteller über Farbe und Kanten.'}</p>
     ${laedt ? '' : `
     ${s.status === 'alpha' ? '' : `
     <label class="fld" style="margin-top:14px">Kante
@@ -2367,8 +2413,7 @@ function renderStudio() {
       </div>
     </label>`}
     <div class="chips" style="margin:0 0 12px">
-      <button class="chip ${s.licht ? 'active' : ''}" onclick="App.studioToggleLicht()">
-        ${ico('sun')} Licht korrigieren</button>
+      <button class="chip ${s.licht ? 'active' : ''}" onclick="App.studioToggleLicht()">${ico('sun')} Licht</button>
       <button class="chip ${s.schatten ? 'active' : ''}" onclick="App.studioToggleSchatten()">Schatten entfernen</button>
       <button class="chip" onclick="App.studioToggleVorher()">${s.zeigeVorher ? 'Ergebnis' : 'Original'} ansehen</button>
     </div>
@@ -2380,7 +2425,7 @@ function renderStudio() {
         <span class="val" data-out="belichtung">${pctSigned(s.belichtung)}</span>
       </div>
     </label>` : ''}
-    <button class="btn primary block" onclick="App.studioCommit()">Übernehmen</button>`}
+    <div class="sheet-fuss"><button class="btn primary block" onclick="App.studioCommit()">Übernehmen</button></div>`}
   </div></div>`;
 }
 
@@ -2401,9 +2446,51 @@ function drawStudioPreview() {
   cv.getContext('2d').drawImage(quelle, 0, 0);
 }
 
+const GRUND_ICO = { farben: 'palette', schuhe: 'shoe', zuschick: 'sparkle', zuleger: 'tee',
+  stil: 'blitz', saison: 'leaf', layer: 'layers' };
+
+function blattKopf(titel, zu) {
+  return `<div class="sheet-head"><h2>${titel}</h2>
+    <button class="zu" onclick="${zu}" aria-label="Schließen">${ico('x')}</button></div>`;
+}
+
 function renderModal() {
   if (UI.studio) return renderStudio();
   if (UI.detail) return renderDetail();
+  if (UI.tossOffen && UI.tab === 'today' && !UI.builder && !UI.sorting) {
+    return `<div class="overlay leicht" onclick="App.tossZurueck()"><div class="sheet kurz" onclick="event.stopPropagation()">
+      ${blattKopf('Was hat nicht gepasst?', 'App.tossZurueck()')}
+      <div class="gruende">${TOSS_GRUENDE.map(([k, l]) =>
+        `<button onclick="App.tossMit('${k}')">${ico(GRUND_ICO[k] || 'x')}${esc(l)}</button>`).join('')}
+        <button class="leise" onclick="App.tossMit('')">${ico('minus')}Keine Angabe</button>
+      </div>
+    </div></div>`;
+  }
+  if (UI.modal === 'saison') {
+    return `<div class="overlay" onclick="App.aktionZu()"><div class="sheet kurz" onclick="event.stopPropagation()">
+      ${blattKopf('Jahreszeit', 'App.aktionZu()')}
+      <div class="liste">${SEASONS.map(s => `<button class="zeile-l" onclick="App.waehleSaison('${s.key}')">
+        <span class="lico ${UI.season === s.key ? 'akzent' : 'hell'}">${ico(s.ico)}</span>
+        <span class="ltext">${s.label}</span>${UI.season === s.key ? ico('check', 'chev') : ''}</button>`).join('')}</div>
+    </div></div>`;
+  }
+  if (UI.modal === 'neu' || UI.modal === 'pin') {
+    const pin = UI.modal === 'pin';
+    return `<div class="overlay" onclick="App.aktionZu()"><div class="sheet kurz" onclick="event.stopPropagation()">
+      ${blattKopf(pin ? 'Pin hinzufügen' : 'Neues Teil', 'App.aktionZu()')}
+      <div class="liste">
+        ${pin ? '' : `<button class="zeile-l" onclick="App.neuAus('camera')"><span class="lico">${ico('camera')}</span>
+          <span class="ltext">Foto machen</span>${ico('chev', 'chev')}</button>`}
+        <button class="zeile-l" onclick="App.neuAus('library')"><span class="lico hell">${ico('image')}</span>
+          <span class="ltext">Aus Fotos wählen</span>${ico('chev', 'chev')}</button>
+        <button class="zeile-l" onclick="App.neuAus('paste')"><span class="lico hell">${ico('paste')}</span>
+          <span class="ltext">Einfügen<small>${pin ? 'Bild aus der Zwischenablage' : 'Freigestelltes Motiv aus der Zwischenablage'}</small></span>${ico('chev', 'chev')}</button>
+      </div>
+      <p class="small" style="margin:12px 4px 0">${pin
+        ? 'In Pinterest den Pin öffnen → Teilen → <b>Bild sichern</b>, dann hier aus Fotos wählen.'
+        : 'Am schönsten: in der Fotos-App das Teil lange antippen → <b>Motiv kopieren</b> → hier einfügen.'}</p>
+    </div></div>`;
+  }
   if (UI.modal === 'pick') return renderPicker();
   if (UI.modal === 'itempick') return renderItemPicker();
   if (UI.modal !== 'item' || !UI.draft) return '';
@@ -2411,33 +2498,24 @@ function renderModal() {
   const isNew = !itemById(d.id);
   const worlds = itemWorlds(d);
   return `<div class="overlay" onclick="App.cancelItem()"><div class="sheet" onclick="event.stopPropagation()">
-    <div class="sheet-head">
-      <h2>${isNew ? 'Neues Teil' : 'Teil bearbeiten'}</h2>
-      <button class="btn small" onclick="App.cancelItem()">Abbrechen</button>
-    </div>
+    ${blattKopf(isNew ? 'Neues Teil' : 'Bearbeiten', 'App.cancelItem()')}
     <div class="checker"><img data-pic="${d.picId}" alt=""></div>
-    ${d.cut ? '' : `<p class="warn" style="margin:8px 0 0">Hintergrund ist noch dran. Tipp: in der Fotos-App
-      das Teil lange antippen, <b>Motiv kopieren</b>, dann hier <b>Einfügen</b>.</p>`}
-    <h3>Kategorie</h3>
+    ${d.cut ? '' : `<p class="warn" style="margin:8px 0 0">Der Hintergrund ist noch dran. Tipp: in der Fotos-App
+      das Teil lange antippen, <b>Motiv kopieren</b>, dann hier einfügen.</p>`}
+    <input type="text" value="${esc(d.name || '')}" placeholder="Name, z. B. ${esc(CATS[d.cat].label)} Creme"
+      oninput="App.draftSet('name', this.value, true)" style="margin-top:14px; font-size:17px; font-weight:600">
+    <h3 class="abschnitt" style="margin-left:0">Kategorie</h3>
     <div class="chips">
       ${CAT_ORDER.map(c => `<button class="chip ${d.cat === c ? 'active' : ''}"
         onclick="App.draftSet('cat','${c}')">${CATS[c].label}</button>`).join('')}
     </div>
-    <label class="fld" style="margin-top:12px">Name (optional)
-      <input type="text" value="${esc(d.name || '')}" placeholder="${esc(CATS[d.cat].label)}"
-        oninput="App.draftSet('name', this.value, true)">
-    </label>
-    <div class="chips" style="margin-top:10px">
-      <button class="chip ${istSport(d) ? 'active' : ''}" onclick="App.draftSport()">Sportbekleidung</button>
-    </div>
-    <p class="small" style="margin:0 0 6px">Sportbekleidung erscheint nur beim Anlass „Sport".</p>
-    <h3>Jahreszeiten</h3>
-    <p class="small" style="margin:0 0 6px">Mehrfachauswahl – ein Teil darf zu mehreren passen.</p>
+    <h3 class="abschnitt" style="margin-left:0">Jahreszeiten</h3>
     <div class="chips">
       ${SEASONS.map(s => `<button class="chip ${(d.seasons || []).includes(s.key) ? 'active' : ''}"
         onclick="App.draftSeason('${s.key}')">${ico(s.ico)} ${s.label}</button>`).join('')}
     </div>
-    <label class="fld" style="margin-top:12px">Wärme
+    <h3 class="abschnitt" style="margin-left:0">Eigenschaften</h3>
+    <label class="fld">Wärme
       <div class="slider-row">
         <input type="range" min="1" max="5" step="1" value="${d.warmth}"
           oninput="App.draftSlide('warmth', +this.value)">
@@ -2451,31 +2529,37 @@ function renderModal() {
         <span class="val" data-out="formality">${FORMAL_LBL[d.formality]}</span>
       </div>
     </label>
-    <h3>Stil</h3>
+    <div class="liste">
+      <button class="zeile-l ohne-ico" onclick="App.draftSport()">
+        <span class="ltext">Sportbekleidung<small>Erscheint nur beim Anlass „Sport"</small></span>
+        <span class="schalter ${istSport(d) ? 'on' : ''}"></span></button>
+    </div>
+    <h3 class="abschnitt" style="margin-left:0">Stil</h3>
     ${(() => {
       const k = d.ki;
-      if (!k || !k.analysiert) return `<p class="small" style="margin:0 0 10px">Noch nicht analysiert.</p>
-        <button class="btn block" onclick="App.analyseEins('${d.id}')">${ico('sparkle')} Mit KI analysieren</button>`;
+      if (!k || !k.analysiert) return `<button class="btn block" onclick="App.analyseEins('${d.id}')">${ico('sparkle')} Mit KI analysieren</button>`;
       const chip = t => `<span class="wtag">${esc(t)}</span>`;
-      return `<span class="worldtags" style="margin-bottom:8px">
+      return `<span class="worldtags">
         ${k.silhouette ? chip(SILHOUETTEN[k.silhouette].label) : ''}
         ${k.material ? chip(MATERIALIEN[k.material].label) : ''}
         ${k.muster && k.muster !== 'uni' ? chip(MUSTER[k.muster].label) : ''}
         ${k.farbe ? chip(k.farbe) : ''}
         ${(k.stil || []).map(chip).join('')}
       </span>
-      <button class="btn small" style="margin-top:4px" onclick="App.analyseEins('${d.id}')">Neu analysieren</button>`;
+      <div><button class="linkbtn" style="margin-top:6px" onclick="App.analyseEins('${d.id}')">${ico('again')} Neu analysieren</button></div>`;
     })()}
-    <h3>Farben</h3>
-    <div class="swatches" style="justify-content:flex-start">
+    <h3 class="abschnitt" style="margin-left:0">Farben</h3>
+    <div class="swatches">
       ${(d.colors || []).map(c => `<span class="sw big" style="background:${esc(c)}"></span>`).join('')
         || '<span class="small">keine erkannt</span>'}
     </div>
-    <span class="worldtags" style="margin-top:8px; display:inline-block">${worlds.length
+    <span class="worldtags" style="margin-top:10px">${worlds.length
       ? worlds.map(w => `<span class="wtag">${esc(WORLD_LBL[w])}</span>`).join('')
       : '<span class="wtag">Neutral</span>'}</span>
-    <button class="btn primary block" style="margin-top:14px" onclick="App.saveItem()">Speichern</button>
-    ${isNew ? '' : '<button class="btn danger block" onclick="App.deleteItem()">Teil löschen</button>'}
+    ${isNew ? '' : '<button class="btn danger block" style="margin-top:18px" onclick="App.deleteItem()">Teil löschen</button>'}
+    <div class="sheet-fuss">
+      <button class="btn primary block" onclick="App.saveItem()">Speichern</button>
+    </div>
   </div></div>`;
 }
 
@@ -2483,10 +2567,7 @@ function renderItemPicker() {
   const list = [...DB.items].sort((a, b) =>
     CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (a.name || '').localeCompare(b.name || ''));
   return `<div class="overlay" onclick="App.closeItemPick()"><div class="sheet" onclick="event.stopPropagation()">
-    <div class="sheet-head">
-      <h2>Nach welchem Teil filtern?</h2>
-      <button class="btn small" onclick="App.closeItemPick()">Abbrechen</button>
-    </div>
+    ${blattKopf('Outfits mit …', 'App.closeItemPick()')}
     ${list.length ? `<div class="grid">${list.map(it =>
         tileHTML(it, `App.chooseOutFilter(&#39;${it.id}&#39;)`)).join('')}</div>`
       : '<p class="hint">Der Schrank ist leer.</p>'}
@@ -2499,10 +2580,7 @@ function renderPicker() {
   const list = DB.items.filter(i => slot.cats.includes(i.cat))
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   return `<div class="overlay" onclick="App.closePick()"><div class="sheet" onclick="event.stopPropagation()">
-    <div class="sheet-head">
-      <h2>${esc(slot.label)} wählen</h2>
-      <button class="btn small" onclick="App.closePick()">Abbrechen</button>
-    </div>
+    ${blattKopf(esc(slot.label), 'App.closePick()')}
     ${list.length ? `<div class="grid">${list.map(it =>
         tileHTML(it, `App.choosePick(&#39;${it.id}&#39;)`)).join('')}</div>`
       : '<p class="hint">In dieser Kategorie ist noch nichts im Schrank.</p>'}
@@ -2513,35 +2591,42 @@ function renderPicker() {
 function attachSwipe() {
   const card = $('#card');
   if (!card) return;
-  const SCHWELLE = 85;
-  if (card.classList.contains('toss-offen')) return;   /* erst Grund wählen */
-  let sx = 0, sy = 0, dx = 0, dy = 0, zieht = false;
+  /* Folgt dem Finger, kippt je nach Griffpunkt und entscheidet nach Weg ODER
+     Schwung – ein kurzer, schneller Wisch reicht wie in jeder Dating-App. */
+  const WEG = 110, SCHWUNG = 0.55;
+  let sx = 0, sy = 0, dx = 0, dy = 0, zieht = false, oben = 1, lt = 0, lx = 0, vx = 0;
   const stamps = k => card.querySelector('.stamp.' + k);
   const zeige = () => {
-    stamps('take').style.opacity = dx > 15 ? Math.min(1, (dx - 15) / 70) : 0;
-    stamps('toss').style.opacity = dx < -15 ? Math.min(1, (-dx - 15) / 70) : 0;
+    const t = Math.min(1, Math.max(0, (dx - 20) / 80)), s = Math.min(1, Math.max(0, (-dx - 20) / 80));
+    stamps('take').style.opacity = t; stamps('take').style.transform = `rotate(-10deg) scale(${0.8 + t * 0.2})`;
+    stamps('toss').style.opacity = s; stamps('toss').style.transform = `rotate(10deg) scale(${0.8 + s * 0.2})`;
   };
   card.addEventListener('pointerdown', e => {
-    zieht = true; sx = e.clientX; sy = e.clientY; dx = dy = 0;
+    if (card.classList.contains('toss-offen')) return;   /* erst Grund wählen */
+    zieht = true; sx = lx = e.clientX; sy = e.clientY; dx = dy = 0; vx = 0; lt = performance.now();
+    const r = card.getBoundingClientRect();
+    oben = (e.clientY - r.top) < r.height / 2 ? 1 : -1;
     card.setPointerCapture(e.pointerId);
     card.style.transition = 'none';
   });
   card.addEventListener('pointermove', e => {
     if (!zieht) return;
     dx = e.clientX - sx; dy = e.clientY - sy;
+    const jetzt = performance.now();
+    if (jetzt > lt) { vx = 0.7 * vx + 0.3 * ((e.clientX - lx) / (jetzt - lt)); lx = e.clientX; lt = jetzt; }
     if (Math.abs(dy) > Math.abs(dx) * 1.5 && Math.abs(dx) < 20) return;  /* senkrecht scrollen lassen */
-    card.style.transform = `translate(${dx}px, ${dy * 0.25}px) rotate(${dx / 24}deg)`;
+    card.style.transform = `translate(${dx}px, ${dy * 0.2}px) rotate(${oben * dx / 20}deg)`;
     zeige();
   });
   const ende = () => {
     if (!zieht) return;
     zieht = false;
-    card.style.transition = 'transform .25s ease, opacity .25s ease';
-    if (dx > SCHWELLE) App.decide('take');
-    else if (dx < -SCHWELLE) App.tossFrage();
+    card.style.transition = '';
+    if (dx > WEG || (vx > SCHWUNG && dx > 30)) App.decide('take');
+    else if (dx < -WEG || (vx < -SCHWUNG && dx < -30)) App.tossFrage();
     else {
       card.style.transform = '';
-      card.querySelectorAll('.stamp').forEach(s => s.style.opacity = 0);
+      card.querySelectorAll('.stamp').forEach(s => { s.style.opacity = 0; s.style.transform = ''; });
     }
   };
   card.addEventListener('pointerup', ende);
@@ -2578,7 +2663,9 @@ App.decide = (what, grund) => {
   const c = UI.queue && UI.queue[0];
   if (!c) return;
   const key = outfitKey(c.ids);
+  const warOffen = !!UI.tossOffen;
   UI.tossOffen = null;
+  if (warOffen) renderOverlay();
   if (what === 'take') {
     if (!DB.outfits.some(o => outfitKey(o.ids) === key)) {
       DB.outfits.push({ id: uid(), date: todayISO(), ids: [...c.ids], liked: true,
@@ -2597,22 +2684,60 @@ App.decide = (what, grund) => {
   UI.queue.shift();
   const card = $('#card');
   if (!card) return render();
-  const x = what === 'take' ? 520 : what === 'toss' ? -520 : 0;
-  const y = what === 'like' ? -480 : 0;
-  card.style.transition = 'transform .25s ease, opacity .25s ease';
-  card.style.transform = `translate(${x}px, ${y}px) rotate(${x / 24}deg)`;
-  card.style.opacity = '0';
-  card.querySelector('.stamp.' + what).style.opacity = 1;
-  setTimeout(render, 230);
+  const weit = window.innerWidth + 160;
+  const x = what === 'take' ? weit : what === 'toss' ? -weit : 0;
+  const y = what === 'like' ? -window.innerHeight * 0.7 : 40;
+  card.style.transition = 'transform .38s cubic-bezier(.4,0,.6,1), opacity .38s ease';
+  card.style.transform = `translate(${x}px, ${y}px) rotate(${x / 22}deg)` + (what === 'like' ? ' scale(.9)' : '');
+  card.style.opacity = what === 'like' ? '0' : '1';
+  const st = card.querySelector('.stamp.' + what);
+  if (st) { st.style.opacity = 1; st.style.transform = ''; }
+  UI._neueKarte = true;
+  setTimeout(render, 300);
 };
+/* Toss öffnet das Gründe-Blatt, ohne die Karte neu zu zeichnen – so kippt
+   sie sichtbar zur Seite statt zu springen. */
 App.tossFrage = () => {
   const c = UI.queue && UI.queue[0];
   if (!c) return;
   UI.tossOffen = outfitKey(c.ids);
-  render();
+  const card = $('#card');
+  if (card) {
+    card.style.transform = '';
+    card.querySelectorAll('.stamp').forEach(s => { s.style.opacity = ''; s.style.transform = ''; });
+    card.classList.add('toss-offen');
+  }
+  renderOverlay();
 };
 App.tossMit = grund => App.decide('toss', grund);
-App.tossZurueck = () => { UI.tossOffen = null; render(); };
+App.tossZurueck = () => {
+  UI.tossOffen = null;
+  const card = $('#card');
+  if (card) card.classList.remove('toss-offen');
+  renderOverlay();
+};
+App.aktion = name => { UI.modal = name; renderOverlay(); };
+App.aktionZu = () => { UI.modal = null; renderOverlay(); };
+App.waehleSaison = k => { UI.modal = null; App.setSeason(k); };
+/* Dateiauswahl muss im selben Tipp passieren, sonst blockiert iOS sie */
+App.neuAus = quelle => {
+  const pin = UI.modal === 'pin';
+  UI.modal = null;
+  renderOverlay();
+  if (pin) { quelle === 'paste' ? App.pasteTrend() : App.addTrend(); return; }
+  quelle === 'paste' ? App.pasteItem() : App.addItem(quelle);
+};
+App.suche = v => {
+  UI.suche = v;
+  const g = $('#schrank-grid');
+  if (!g) return;
+  _usedIds = null;
+  g.innerHTML = schrankGridHTML();
+  hydratePics();
+};
+App.profilAuf = () => { UI.profilOffen = true; render(); };
+App.profilZu = () => { UI.profilOffen = false; render(); };
+App.teilAusOutfit = id => { UI.detail = null; App.editItem(id); };
 App.stylistNeu = () => stylistHolen(true);
 /* Wer nicht warten will, bekommt sofort die lokale Auswahl; die Ergebnisse
    der Stylistin rücken nach, sobald sie da sind. */
@@ -3403,7 +3528,7 @@ document.addEventListener('visibilitychange', () => {
 
 /* Trennlinie im Kopf erst zeigen, wenn Inhalt darunter weggescrollt ist */
 const topbar = $('#topbar');
-const onScroll = () => topbar && topbar.classList.toggle('scrolled', window.scrollY > 4);
+const onScroll = () => topbar && topbar.classList.toggle('scrolled', window.scrollY > 38);
 window.addEventListener('scroll', onScroll, { passive: true });
 onScroll();
 
