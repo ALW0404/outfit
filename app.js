@@ -1939,6 +1939,13 @@ function renderToday() {
       <button class="btn small" onclick="App.stylistNichtWarten()">Nicht warten</button>
     </div>`
   : c ? swipeHTML(c, UI.queue.length > 1) + stylistFussHTML()
+  : !DB.items.length ? `<div class="card leer">
+      <div class="leer-ico">${ico('sparkle')}</div>
+      <h2>Willkommen</h2>
+      <p class="hint">Fotografiere ein paar Teile aus deinem Schrank – Oberteile, Hosen oder Röcke und
+      Schuhe. Danach stellt dir die App hier jeden Tag Outfits zusammen.</p>
+      <button class="btn primary block" onclick="App.setTab('closet'); App.aktion('neu')">${ico('plus')} Erstes Teil hinzufügen</button>
+    </div>`
   : (() => {
       const luecke = poolLuecke(UI.season);
       const sport = istSportModus();
