@@ -1,0 +1,8 @@
+# Cloudflare Pages: eigene Kopfzeilen. Auf GitHub Pages nicht möglich.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+
+# Modell und Laufzeit ändern sich praktisch nie
+/ki/*
+  Cache-Control: public, max-age=31536000, immutable

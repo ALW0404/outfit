@@ -1,0 +1,9 @@
+.DS_Store
+# Backups und Screenshots gehören nicht ins Repo (GitHub lehnt Dateien >100 MB ab)
+outfit-backup-*.json
+*.png
+!icon-192.png
+!icon-512.png
+!apple-touch-icon.png
+app.js.v1.bak
+style.css.bak
