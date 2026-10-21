@@ -234,6 +234,15 @@ genau (Art, Farben, Abstand, Richtung). Dem Bildmodell geht zusätzlich eine Nah
 des Teils mit. Danach misst die App die Stofffarbe im Originalfoto und schiebt das Ergebnis dorthin –
 das Bildmodell hellte sonst gern auf (sandbeige wurde fast weiß).
 
+**Gelöschte Teile in Outfits.** Steckt ein Teil in gemerkten Outfits, wird es beim Löschen nicht
+entfernt, sondern als „nicht mehr da" markiert: im Outfit blass mit rotem Symbol, das Outfit selbst mit
+rotem Rand und im Filter *Nicht mehr komplett*. Wird das letzte Outfit mit dem Teil gelöscht,
+verschwindet es endgültig. (Teile, die vor dieser Änderung gelöscht wurden, lassen sich nicht mehr
+zurückholen.)
+
+**Mehrere Teile auf einem Foto im Studio.** Ganzkörperfoto gemacht? Im Studio *Mehrere Teile im Bild?
+Alle auf einmal übernehmen* – dann läuft dasselbe wie beim Kleiderhaufen: erkennen, abhaken, nachbilden.
+
 **Wunschliste aus Pins.** Im Reiter Trends einen Pin antippen → *Teile auf die Wunschliste*: Die App
 zerlegt den Look in seine Teile und bildet jedes als Produktfoto nach. Wunsch-Teile stehen im Schrank
 unter **Wunschliste**, fließen in keine Vorschläge ein und tragen oben die Shop-Links. Gekauft? Im

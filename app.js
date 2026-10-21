@@ -315,7 +315,7 @@ let UI = { tab: 'today', closetFilter: 'all', season: seasonNow(), mood: 3,
 try { Object.assign(UI, JSON.parse(localStorage.getItem(LS_UI) || '{}')); } catch (e) {}
 /* Gespeicherte Auswahl gegen die aktuellen Listen prüfen: ändert sich ein Schlüssel,
    zeigt die App sonst stillschweigend eine leere Liste an. */
-if (UI.outTagFilter !== 'all' && !OUTFIT_TAGS.some(t => t.key === UI.outTagFilter)) UI.outTagFilter = 'all';
+if (UI.outTagFilter !== 'all' && UI.outTagFilter !== 'unvollstaendig' && !OUTFIT_TAGS.some(t => t.key === UI.outTagFilter)) UI.outTagFilter = 'all';
 if (UI.closetFilter !== 'all' && UI.closetFilter !== '_ohneki' && !CATS[UI.closetFilter]) UI.closetFilter = 'all';
 if (!SEASONS.some(s => s.key === UI.season)) UI.season = seasonNow();
 if (!['neu', 'saison'].includes(UI.outSort)) UI.outSort = 'neu';
@@ -332,8 +332,10 @@ function saveUI() {
 }
 const itemById = id => DB.items.find(i => i.id === id);
 /* Teile aus Pins sind Wünsche, keine Teile im Schrank: sie tauchen in keinem Vorschlag auf */
-const eigene = () => DB.items.filter(i => !i.wunsch);
-const wuensche = () => DB.items.filter(i => i.wunsch);
+const eigene = () => DB.items.filter(i => !i.wunsch && !i.geloescht);
+const wuensche = () => DB.items.filter(i => i.wunsch && !i.geloescht);
+/* Teil weg, aber noch in gemerkten Outfits: bleibt sichtbar, als „nicht mehr da" markiert */
+const outfitUnvollstaendig = o => o.ids.some(id => { const it = itemById(id); return !it || it.geloescht; });
 const needsSortCount = () => eigene().filter(i => i.needsSort).length;
 /* Teile, die in noch keiner gemerkten Kombination vorkommen – pro Render einmal berechnet */
 let _usedIds = null;
@@ -981,8 +983,9 @@ function collageLayout(items) {
 function collageHTML(items, opt = {}) {
   if (!items || !items.length) return '<p class="hint">Keine Teile für diese Collage.</p>';
   const pieces = collageLayout(items).map(p =>
-    `<div class="cpiece" style="left:${pct(p.r.left)}; top:${pct(p.r.top)}; width:${pct(p.r.w)}; height:${pct(p.r.h)}; z-index:${p.r.z}">
-       <img data-pic="${p.it.picId}" alt="${esc(p.it.name || CATS[p.it.cat].label)}"></div>`).join('');
+    `<div class="cpiece${p.it.geloescht ? ' weg' : ''}" style="left:${pct(p.r.left)}; top:${pct(p.r.top)}; width:${pct(p.r.w)}; height:${pct(p.r.h)}; z-index:${p.r.z}">
+       <img data-pic="${p.it.picId}" alt="${esc(p.it.name || CATS[p.it.cat].label)}">
+       ${p.it.geloescht ? `<span class="weg-marke" title="Nicht mehr im Schrank">${ico('minus')}</span>` : ''}</div>`).join('');
   const sticker = opt.tag
     ? `<span class="osticker">${ico(tagInfo(opt.tag).ico)}${opt.tagLabel ? esc(tagInfo(opt.tag).label) : ''}</span>`
     : '';
@@ -2178,11 +2181,11 @@ function schrankGridHTML() {
 function tileHTML(it, onclick) {
   /* Nur echte Strings zählen: bei map(tileHTML) käme sonst der Index als onclick an */
   const action = typeof onclick === 'string' ? onclick : `App.editItem('${it.id}')`;
-  return `<div class="tile" role="button" onclick="${action}">
+  return `<div class="tile${it.geloescht ? ' weg' : ''}" role="button" onclick="${it.geloescht ? '' : action}">
     ${it.needsSort ? '<span class="dot" title="Unterkategorie fehlt"></span>' : ''}
     ${!it.wunsch && istUngenutzt(it.id) ? '<span class="flag" title="In keiner gemerkten Kombination"></span>' : ''}
     <div class="thumbwrap"><img data-pic="${it.picId}" alt="${esc(it.name || '')}"></div>
-    <div class="cap">${esc(it.name || CATS[it.cat].label)}</div>
+    <div class="cap">${esc(it.name || CATS[it.cat].label)}${it.geloescht ? '<small>nicht mehr da</small>' : ''}</div>
   </div>`;
 }
 
@@ -2190,6 +2193,8 @@ function renderOutfits() {
   let list = [...DB.outfits];
   if (UI.outTagFilter && UI.outTagFilter !== 'all') list = list.filter(o => outfitTag(o) === UI.outTagFilter);
   if (UI.outFilter) list = list.filter(o => o.ids.includes(UI.outFilter));
+  if (UI.outTagFilter === 'unvollstaendig') list = [...DB.outfits].filter(outfitUnvollstaendig);
+  const nUnvoll = DB.outfits.filter(outfitUnvollstaendig).length;
   list.sort(UI.outSort === 'saison'
     ? (x, y) => (TAG_ORDER[outfitTag(x)] - TAG_ORDER[outfitTag(y)]) || (y.date || '').localeCompare(x.date || '')
     : (x, y) => (y.date || '').localeCompare(x.date || ''));
@@ -2205,6 +2210,7 @@ function renderOutfits() {
     <button class="chip ${UI.outTagFilter === 'all' ? 'active' : ''}" onclick="App.setOutTag('all')">Alle <span class="zahl">${DB.outfits.length}</span></button>
     ${OUTFIT_TAGS.filter(t => zaehl(t.key)).map(t =>
       `<button class="chip ${UI.outTagFilter === t.key ? 'active' : ''}" onclick="App.setOutTag('${t.key}')">${ico(t.ico)} ${esc(t.label)} <span class="zahl">${zaehl(t.key)}</span></button>`).join('')}
+    ${nUnvoll ? `<button class="chip ${UI.outTagFilter === 'unvollstaendig' ? 'active' : ''}" onclick="App.setOutTag('unvollstaendig')">${ico('minus')} Nicht mehr komplett <span class="zahl">${nUnvoll}</span></button>` : ''}
     <span class="trenner"></span>
     ${gefiltert
       ? `<button class="chip active" onclick="App.clearOutFilter()">${esc((gefiltert.name || CATS[gefiltert.cat].label).slice(0, 18))} ${ico('x')}</button>`
@@ -2213,7 +2219,7 @@ function renderOutfits() {
   ${segHTML('outsort', [['neu', 'Neueste'], ['saison', 'Nach Saison']], UI.outSort, 'App.setOutSort')}
   ${list.length ? `<div class="ogrid">${list.map(o => {
       const items = o.ids.map(itemById).filter(Boolean);
-      return `<div class="ocell" role="button" onclick="App.openOutfit('${o.id}')">
+      return `<div class="ocell${outfitUnvollstaendig(o) ? ' unvoll' : ''}" role="button" onclick="App.openOutfit('${o.id}')">
         ${items.length ? collageHTML(items, { klein: true, tag: outfitTag(o) })
           : '<div class="collage klein empty"><span>leer</span></div>'}
         ${o.name ? `<div class="ocap">${esc(o.name)}</div>` : ''}
@@ -2226,7 +2232,7 @@ function renderDetail() {
   const o = DB.outfits.find(x => x.id === UI.detail);
   if (!o) return '';
   const items = o.ids.map(itemById).filter(Boolean);
-  const fehlend = o.ids.length - items.length;
+  const fehlend = o.ids.length - items.length + items.filter(i => i.geloescht).length;
   const worlds = outfitWorlds(items);
   const tag = outfitTag(o);
   return `<div class="overlay" onclick="App.closeOutfit()"><div class="sheet" onclick="event.stopPropagation()">
@@ -2237,7 +2243,7 @@ function renderDetail() {
     ${items.length ? collageHTML(items, { tag, tagLabel: true })
       : '<p class="hint">Alle Teile dieses Outfits wurden inzwischen gelöscht.</p>'}
     <div class="teileleiste">${items.map(it => tileHTML(it, `App.teilAusOutfit(&#39;${it.id}&#39;)`)).join('')}</div>
-    ${fehlend ? `<p class="warn">${fehlend} ${fehlend === 1 ? 'Teil ist' : 'Teile sind'} nicht mehr im Schrank.</p>` : ''}
+    ${fehlend ? `<p class="warn">${ico('minus')} ${fehlend} ${fehlend === 1 ? 'Teil ist' : 'Teile sind'} nicht mehr im Schrank – blass markiert.</p>` : ''}
     <h3 class="abschnitt" style="margin-left:0">Kategorie</h3>
     <div class="chips">
       ${OUTFIT_TAGS.map(t => `<button class="chip ${tag === t.key ? 'active' : ''}"
@@ -2378,7 +2384,7 @@ function renderTrends() {
 }
 
 function renderData() {
-  const offen = DB.items.filter(i => !istAnalysiert(i)).length;
+  const offen = eigene().filter(i => !istAnalysiert(i)).length;
   const zeile = (aufruf, icon, farbe, text, klein, extra = '') =>
     `<button class="zeile-l" onclick="${aufruf}"><span class="lico ${farbe}">${ico(icon)}</span>
       <span class="ltext">${text}${klein ? `<small>${klein}</small>` : ''}</span>${extra || ico('chev', 'chev')}</button>`;
@@ -2509,6 +2515,7 @@ function studioTeilHTML(s, laedt) {
       : s.umriss ? `Nur ${esc(TEIL_NAME[s.teilKat])} ausgeschnitten.`
       : nachbilden ? '<b>Was ist das?</b> Tippe an – die App macht daraus ein Produktfoto.'
       : 'Person, Bügel oder anderes mit im Bild? Tippe an, was ausgeschnitten werden soll:'}</p>
+    ${!s.umriss && !s.teilLaedt ? `<button class="linkbtn" style="margin:-2px 0 6px" onclick="App.studioAlleTeile()">${ico('layers')} Mehrere Teile im Bild? Alle auf einmal übernehmen</button>` : ''}
     <div class="chips zeile">
       ${Object.keys(TEIL_NAME).map(k => `<button class="chip mini ${s.teilKat === k ? 'active' : ''}"
         onclick="App.studioTeil('${k}')" ${s.teilLaedt ? 'disabled' : ''}>${s.teilLaedt === k ? '<span class="spin mini"></span>' : ''}${TEIL_NAME[k]}</button>`).join('')}
@@ -3204,6 +3211,7 @@ App.delOutfit = id => {
   save();
   UI.detail = null;
   render();
+  geloeschteAufraeumen();
 };
 
 /* --- Nachsortieren --- */
@@ -3354,6 +3362,16 @@ App.studioNachbilden = async () => {
   }
 };
 
+/* Ganzkörperfoto: statt einem Teil alle erkennen – Ablauf wie beim Kleiderhaufen */
+App.studioAlleTeile = async () => {
+  const s = UI.studio;
+  if (!s) return;
+  const quelle = s.original || s.gross;
+  const blob = await canvasToBlob(quelle, 'image/jpeg', 0.92);
+  UI.studio = null;
+  await openHaufen(blob, false, true);
+};
+
 App.studioOriginal = async () => {
   const s = UI.studio;
   if (!s || !s.original) return;
@@ -3377,7 +3395,7 @@ const daumen = (cv, max = 240) => {
 
 const HAUFEN_MIN_SICHTBAR = 50;
 
-async function openHaufen(file, wunsch) {
+async function openHaufen(file, wunsch, getragen) {
   const url = URL.createObjectURL(file);
   try {
     const img = await loadImg(url);
@@ -3386,7 +3404,7 @@ async function openHaufen(file, wunsch) {
     UI.modal = 'haufen'; render();
     const res = await fetch(dienstUrl() + '/haufen', {
       method: 'POST', headers: dienstKopf(),
-      body: JSON.stringify({ bild: await studioBild64(bild, 1280), getragen: !!wunsch })
+      body: JSON.stringify({ bild: await studioBild64(bild, 1280), getragen: !!(wunsch || getragen) })
     });
     const j = await antwortLesen(res);
     const h = UI.haufen;
@@ -3689,13 +3707,33 @@ App.cancelItem = async () => {
 };
 App.deleteItem = async () => {
   const d = UI.draft;
-  if (!d || !confirm('Dieses Teil wirklich löschen?')) return;
-  DB.items = DB.items.filter(i => i.id !== d.id);
-  save();
+  if (!d) return;
+  const inOutfits = DB.outfits.filter(o => o.ids.includes(d.id)).length;
+  if (!confirm(inOutfits
+    ? `Dieses Teil löschen? Es steckt in ${inOutfits} ${inOutfits === 1 ? 'Outfit' : 'Outfits'} – dort bleibt es sichtbar, als „nicht mehr da" markiert.`
+    : 'Dieses Teil wirklich löschen?')) return;
   UI.modal = null; UI.draft = null; UI.queue = null;
-  dropPicURL(d.picId); await picDel(d.picId);
+  if (inOutfits) {
+    const it = itemById(d.id);
+    if (it) { it.geloescht = true; it.geloeschtAm = todayISO(); }
+    save();
+  } else {
+    DB.items = DB.items.filter(i => i.id !== d.id);
+    save();
+    dropPicURL(d.picId); await picDel(d.picId);
+  }
   render();
 };
+
+/* Gelöschte Teile, die in keinem Outfit mehr stecken, endgültig entfernen */
+async function geloeschteAufraeumen() {
+  const gebraucht = new Set(DB.outfits.flatMap(o => o.ids));
+  const weg = DB.items.filter(i => i.geloescht && !gebraucht.has(i.id));
+  if (!weg.length) return;
+  DB.items = DB.items.filter(i => !weg.includes(i));
+  save();
+  for (const i of weg) { dropPicURL(i.picId); await picDel(i.picId).catch(() => {}); }
+}
 
 /* --- Trends --- */
 App.addTrend = () => { const i = $('#pick-trend'); i.value = ''; i.click(); };
@@ -3832,7 +3870,7 @@ const KI_PAUSE_MS = 6500;
 
 App.analyseAlle = async () => {
   const sag = t => { kiMeldung = t; const el = $('#ki-fortschritt'); if (el) el.textContent = t; };
-  const offen = DB.items.filter(i => !istAnalysiert(i));
+  const offen = eigene().filter(i => !istAnalysiert(i));
   if (!offen.length) return;
 
   let fertig = 0, sammeln = true, abfragen = 0;
