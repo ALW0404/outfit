@@ -252,7 +252,7 @@ zerlegt den Look in seine Teile und bildet jedes als Produktfoto nach. Wunsch-Te
 unter **Wunschliste**, fließen in keine Vorschläge ein und tragen oben die Shop-Links. Gekauft? Im
 Teil auf den Hinweis tippen, dann wandert es in den Schrank.
 
-**Shop-Links.** Jedes Teil hat Links zu Zalando, About You, Google Shopping und Vinted (gebraucht) –
+**Shop-Links.** Jedes Teil hat Links zu Zara, Mango, H&M, Zalando, About You, Google Shopping und Vinted (gebraucht) –
 mit einem Suchbegriff, den die Erkennung passend formuliert. Eine echte Recherche konkreter
 Produktseiten mit Preis braucht die Google-Suche von Gemini; die ist im kostenlosen Tarif gesperrt
 und wird mit Abrechnung bis 1.500 Suchen am Tag frei (Endpunkt `/shopping` ist vorbereitet).

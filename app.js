@@ -3080,6 +3080,9 @@ const shopHTML = (d, titel) => `<h3 class="abschnitt" style="margin-left:0">${ti
 function shopLinks(it) {
   const q = encodeURIComponent(String(it.suchbegriff || it.name || CATS[it.cat].label).replace(/\s+/g, ' ').trim());
   return [
+    ['Zara', `https://www.zara.com/de/de/search?searchTerm=${q}&section=WOMAN`],
+    ['Mango', `https://shop.mango.com/de/de/search/damen?q=${q}`],
+    ['H&M', `https://www2.hm.com/de_de/search-results.html?q=${q}`],
     ['Zalando', `https://www.zalando.de/katalog/?q=${q}`],
     ['About You', `https://www.aboutyou.de/suche?term=${q}`],
     ['Google Shopping', `https://www.google.com/search?tbm=shop&q=${q}`],
