@@ -1467,6 +1467,28 @@ function geraetId() {
 }
 const dienstKopf = () => ({ 'Content-Type': 'application/json', 'X-Geraet': geraetId() });
 
+/* ---- Damen oder Herren ----
+   Je Person einstellbar: steuert Kategorien (Hemden statt Blusen, kein Rock und
+   kein Kleid), Shop-Links und den Hinweis an die KI. */
+const abteilung = () => (DB.prefs && DB.prefs.abteilung) || 'damen';
+const herren = () => abteilung() === 'herren';
+const AUSGEBLENDET_HERREN = ['skirt', 'dress'];
+const sichtbareKats = () => herren() ? CAT_ORDER.filter(c => !AUSGEBLENDET_HERREN.includes(c)) : CAT_ORDER;
+function abteilungAnwenden() {
+  const h = herren();
+  CATS.blouse.label = h ? 'Hemden' : 'Blusen';
+  CATS.blouse.kurz = h ? 'Hemden' : 'Blusen';
+  TEIL_NAME.blouse = h ? 'Hemd' : 'Bluse';
+  KAT_EN.blouse = h ? 'button-up shirt' : 'blouse';
+  CATS.top.label = h ? 'T-Shirts & Polos' : 'Tops & Shirts';
+}
+function setAbteilung(a) {
+  DB.prefs = DB.prefs || {};
+  DB.prefs.abteilung = a;
+  save(); abteilungAnwenden(); UI.queue = null;
+  render();
+}
+
 /* Fürs Analysieren reichen 512 px – spart Übertragung und Kosten */
 async function bildFuerAnalyse(picId, max = 512) {
   const blob = await picGet(picId);
@@ -1720,6 +1742,7 @@ function stylistAnfrageBauen(season, mood) {
       saison: SEASONS.find(x => x.key === season).label,
       anlass: ANLASS_TEXT[mood] || ANLASS_TEXT[3],
       anzahl: STYLIST_ANZAHL,
+      abteilung: abteilung(),
       teile: pool.map(it => ({ k: code.get(it.id), t: stylistZeile(it) })),
       profil: p ? { aesthetik: p.aesthetik, farbregeln: p.farbregeln, vermeiden: p.vermeiden || [],
         stylingregeln: p.stylingregeln || [],
@@ -1990,6 +2013,8 @@ function renderToday() {
   : !eigene().length ? `<div class="card leer">
       <div class="leer-ico">${ico('sparkle')}</div>
       <h2>Willkommen</h2>
+      <p class="small" style="margin:0 0 8px">Wofür ist dein Schrank?</p>
+      ${segHTML('abteilung-start', [['damen', 'Damenmode'], ['herren', 'Herrenmode']], abteilung(), 'App.setAbteilung')}
       <p class="hint">Fotografiere ein paar Teile aus deinem Schrank – Oberteile, Hosen oder Röcke und
       Schuhe. Danach stellt dir die App hier jeden Tag Outfits zusammen.</p>
       <button class="btn primary block" onclick="App.setTab('closet'); App.aktion('neu')">${ico('plus')} Teile hinzufügen</button>
@@ -2108,7 +2133,7 @@ function renderCatSorter() {
       <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button></div>`;
   }
   const it = todo[0];
-  const opts = SORT_OPTIONS[it.cat] || CAT_ORDER;
+  const opts = (SORT_OPTIONS[it.cat] || CAT_ORDER).filter(c => sichtbareKats().includes(c));
   return `<h1 class="grosstitel">Nachsortieren</h1>
   <p class="untertitel">Noch ${todo.length} – tippe an, was es ist.</p>
   <div class="card">
@@ -2327,7 +2352,7 @@ function renderBuilder() {
       : 'Mit dem Schloss fixieren, dann würfeln'} · für ${esc(SEASONS.find(s => s.key === builderSeason()).label)}</span>
   </div>
   <h3 class="abschnitt">Teile</h3>
-  <div class="liste">${SLOTS.map(s => slotRowHTML(s, b)).join('')}</div>
+  <div class="liste">${SLOTS.filter(s => !(herren() && s.key === 'base_full')).map(s => slotRowHTML(s, b)).join('')}</div>
   <h3 class="abschnitt">Name</h3>
   <input type="text" value="${esc(b.name || '')}" placeholder="optional, z. B. Bürotag im Herbst"
     oninput="App.builderName(this.value)" style="background:var(--surface); box-shadow:var(--shadow-1)">
@@ -2415,6 +2440,10 @@ function renderData() {
   <p class="small" style="margin:8px 4px 0">Alles liegt auf diesem Gerät.
     <span id="usage" onclick="App.tippSpeicher()">Speicher wird ermittelt …</span></p>
   ${entwicklermodus() ? '<p class="small" style="margin:4px">Entwicklereinstellungen sichtbar – fünfmal auf die Speicherangabe tippen blendet sie aus.</p>' : ''}
+
+  <h3 class="abschnitt">Mein Schrank</h3>
+  ${segHTML('abteilung', [['damen', 'Damenmode'], ['herren', 'Herrenmode']], abteilung(), 'App.setAbteilung')}
+  <p class="small" style="margin:-4px 4px 0">Steuert Kategorien, Shop-Links und die Vorschläge der Stylistin.</p>
 
   <h3 class="abschnitt">Sichern</h3>
   <div class="liste">
@@ -2535,7 +2564,7 @@ function studioTeilHTML(s, laedt) {
       : 'Person, Bügel oder anderes mit im Bild? Tippe an, was ausgeschnitten werden soll:'}</p>
     ${!s.umriss && !s.teilLaedt ? `<button class="linkbtn" style="margin:-2px 0 6px" onclick="App.studioAlleTeile()">${ico('layers')} Mehrere Teile im Bild? Alle auf einmal übernehmen</button>` : ''}
     <div class="chips zeile">
-      ${Object.keys(TEIL_NAME).map(k => `<button class="chip mini ${s.teilKat === k ? 'active' : ''}"
+      ${sichtbareKats().map(k => `<button class="chip mini ${s.teilKat === k ? 'active' : ''}"
         onclick="App.studioTeil('${k}')" ${s.teilLaedt ? 'disabled' : ''}>${s.teilLaedt === k ? '<span class="spin mini"></span>' : ''}${TEIL_NAME[k]}</button>`).join('')}
       ${s.umriss ? `<button class="chip mini leise" onclick="App.studioTeil(null)">Ganzes Motiv</button>` : ''}
     </div>
@@ -2818,7 +2847,7 @@ function renderModal() {
       oninput="App.draftSet('name', this.value, true)" style="margin-top:14px; font-size:17px; font-weight:600">
     <h3 class="abschnitt" style="margin-left:0">Kategorie</h3>
     <div class="chips">
-      ${CAT_ORDER.map(c => `<button class="chip ${d.cat === c ? 'active' : ''}"
+      ${sichtbareKats().concat(sichtbareKats().includes(d.cat) ? [] : [d.cat]).map(c => `<button class="chip ${d.cat === c ? 'active' : ''}"
         onclick="App.draftSet('cat','${c}')">${CATS[c].label}</button>`).join('')}
     </div>
     <h3 class="abschnitt" style="margin-left:0">Jahreszeiten</h3>
@@ -3079,14 +3108,17 @@ const shopHTML = (d, titel) => `<h3 class="abschnitt" style="margin-left:0">${ti
       `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener">${esc(n)} ${ico('more')}</a>`).join('')}</div>`;
 function shopLinks(it) {
   const q = encodeURIComponent(String(it.suchbegriff || it.name || CATS[it.cat].label).replace(/\s+/g, ' ').trim());
+  const h = herren();
+  /* Shops ohne eigene Abteilung in der Adresse bekommen das Wort in die Suche */
+  const qa = encodeURIComponent((h ? 'Herren ' : 'Damen ') + decodeURIComponent(q));
   return [
-    ['Zara', `https://www.zara.com/de/de/search?searchTerm=${q}&section=WOMAN`],
-    ['Mango', `https://shop.mango.com/de/de/search/damen?q=${q}`],
-    ['H&M', `https://www2.hm.com/de_de/search-results.html?q=${q}`],
-    ['Zalando', `https://www.zalando.de/katalog/?q=${q}`],
-    ['About You', `https://www.aboutyou.de/suche?term=${q}`],
-    ['Google Shopping', `https://www.google.com/search?tbm=shop&q=${q}`],
-    ['Vinted · gebraucht', `https://www.vinted.de/catalog?search_text=${q}`]
+    ['Zara', `https://www.zara.com/de/de/search?searchTerm=${q}&section=${h ? 'MAN' : 'WOMAN'}`],
+    ['Mango', `https://shop.mango.com/de/de/search/${h ? 'herren' : 'damen'}?q=${q}`],
+    ['H&M', `https://www2.hm.com/de_de/search-results.html?q=${qa}`],
+    ['Zalando', `https://www.zalando.de/${h ? 'herren' : 'damen'}/?q=${q}`],
+    ['About You', `https://www.aboutyou.de/suche?term=${qa}`],
+    ['Google Shopping', `https://www.google.com/search?tbm=shop&q=${qa}`],
+    ['Vinted · gebraucht', `https://www.vinted.de/catalog?search_text=${qa}`]
   ];
 }
 
@@ -3176,6 +3208,7 @@ App.auswahlTeilen = async () => {
   }
 };
 
+App.setAbteilung = setAbteilung;
 App.teilAusOutfit = id => { UI.detail = null; App.editItem(id); };
 App.stylistNeu = () => stylistHolen(true);
 /* Wer nicht warten will, bekommt sofort die lokale Auswahl; die Ergebnisse
@@ -3511,7 +3544,7 @@ async function openHaufen(file, wunsch, getragen) {
     UI.modal = 'haufen'; render();
     const res = await fetch(dienstUrl() + '/haufen', {
       method: 'POST', headers: dienstKopf(),
-      body: JSON.stringify({ bild: await studioBild64(bild, 1280), getragen: !!(wunsch || getragen) })
+      body: JSON.stringify({ bild: await studioBild64(bild, 1280), getragen: !!(wunsch || getragen), abteilung: abteilung() })
     });
     const j = await antwortLesen(res);
     const h = UI.haufen;
@@ -4255,6 +4288,7 @@ const nachtAbgleich = () => {
   _nachtZuletzt = Date.now();
   nachtAbholen().then(schrankAblegen);
 };
+abteilungAnwenden();
 if (dienstUrl()) nachtLaedt = true;     /* nicht live fragen, bevor die Nacht geprüft ist */
 render();
 nachtAbgleich();

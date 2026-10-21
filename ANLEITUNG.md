@@ -234,6 +234,10 @@ genau (Art, Farben, Abstand, Richtung). Dem Bildmodell geht zusätzlich eine Nah
 des Teils mit. Danach misst die App die Stofffarbe im Originalfoto und schiebt das Ergebnis dorthin –
 das Bildmodell hellte sonst gern auf (sandbeige wurde fast weiß).
 
+**Damen- oder Herrenmode.** Unter *Daten → Mein Schrank* (und beim ersten Start) je Person wählbar.
+Herrenmode: „T-Shirts & Polos" und „Hemden" statt „Tops & Shirts" und „Blusen", Rock und Kleid
+ausgeblendet, Shop-Links in die Herren-Abteilungen, und die Stylistin stellt Herren-Outfits zusammen.
+
 **Mehrere Teile auswählen.** Im Schrank ein Teil kurz gedrückt halten (oder oben *Auswählen*), dann
 weitere antippen. Unten erscheinen *Alle*, *Teilen* (Produktbilder als PNG über das Teilen-Menü) und
 *Löschen*. *Fertig* beendet die Auswahl.

@@ -323,12 +323,14 @@ async function stylistErzeugen(env, body, geraet) {
     `\n\nJahreszeit: ${String(body.saison || '').slice(0, 30)}` +
     `\nAnlass: ${String(body.anlass || '').slice(0, 80)}` +
     `\nAnzahl Outfits: ${anzahl}` +
-    (profil ? `\n\nAus ihren Pinterest-Pins abgeleitet:\n${profil}` : '') +
-    (regeln.length ? `\n\nAus ihren Entscheidungen in der App gelernt:\n- ${regeln.join('\n- ')}` : '') +
+    (body.abteilung === 'herren' ? '\nDie Person trägt Herrenmode – stelle Outfits für einen Mann zusammen.'
+      : body.abteilung === 'damen' ? '\nDie Person trägt Damenmode.' : '') +
+    (profil ? `\n\nAus den Pinterest-Pins der Person abgeleitet:\n${profil}` : '') +
+    (regeln.length ? `\n\nAus den Entscheidungen der Person in der App gelernt:\n- ${regeln.join('\n- ')}` : '') +
     `\n\nKleiderschrank:\n` + zeilen.join('\n') +
     beispiele(body.gemocht, 'Diese Outfits hat die Person gemerkt – daran orientieren:', 20) +
-    beispiele(body.okay, 'Diese fand sie tragbar, aber nicht begeisternd – kein Fehler, aber auch nicht souverän. Das ist die Untergrenze; ziele höher:', 15) +
-    beispiele(body.verworfen, 'Diese Kombinationen hat sie verworfen – solche Fehler nicht wiederholen:', 25);
+    beispiele(body.okay, 'Diese fand die Person tragbar, aber nicht begeisternd – kein Fehler, aber auch nicht souverän. Das ist die Untergrenze; ziele höher:', 15) +
+    beispiele(body.verworfen, 'Diese Kombinationen hat die Person verworfen – solche Fehler nicht wiederholen:', 25);
   const ergebnis = await gemini(env, [{ text }], SCHEMA_STYLIST, 0.6,
     env.STYLIST_MODEL || STYLIST_MODELL);
   await zaehleHoch(env, 1, geraet);
@@ -482,7 +484,8 @@ mit; Haut, Haare und Hintergrund nicht.`;
 async function haufen(env, body) {
   const bild = String(body.bild || '');
   if (!bild || bild.length > 6_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
-  const prompt = body.getragen ? PROMPT_GETRAGEN + '\n\n' + PROMPT_HAUFEN.split('\n\n').slice(1).join('\n\n') : PROMPT_HAUFEN;
+  const hinweis = body.abteilung === 'herren' ? '\nEs handelt sich um Herrenmode: Hemden zählen als blouse.\n' : '';
+  const prompt = hinweis + (body.getragen ? PROMPT_GETRAGEN + '\n\n' + PROMPT_HAUFEN.split('\n\n').slice(1).join('\n\n') : PROMPT_HAUFEN);
   const ergebnis = await gemini(env, [{ text: prompt }, { inline_data: { mime_type: 'image/jpeg', data: bild } }],
     SCHEMA_HAUFEN, 0.1, env.HAUFEN_MODEL || 'gemini-flash-lite-latest');   /* das große Modell brauchte bis zu 2 Minuten */
   ergebnis.teile = (ergebnis.teile || []).filter(t => Array.isArray(t.box_2d) && t.box_2d.length === 4).slice(0, 12)
@@ -793,7 +796,7 @@ export default {
       if (url.pathname === '/analyse') {
         if (!body.bild) return json({ fehler: 'Feld "bild" fehlt' }, env, 400);
         const ergebnis = await gemini(env, [
-          { text: PROMPT_TEIL + `\n\nKategorie laut Nutzerin: ${body.kategorie || 'unbekannt'}.` +
+          { text: PROMPT_TEIL + `\n\nKategorie laut Nutzer: ${body.kategorie || 'unbekannt'}.` +
                   (body.name ? ` Eigene Bezeichnung: ${body.name}.` : '') },
           { inline_data: { mime_type: 'image/jpeg', data: body.bild } }
         ], SCHEMA_TEIL);
@@ -806,7 +809,7 @@ export default {
         if (!teile.length) return json({ fehler: 'Feld "teile" fehlt' }, env, 400);
         const parts = [{ text: PROMPT_MEHRERE }];
         teile.forEach((t, i) => {
-          parts.push({ text: `Nummer ${i}${t.kategorie ? ', Kategorie laut Nutzerin: ' + t.kategorie : ''}${t.name ? ', Bezeichnung: ' + t.name : ''}` });
+          parts.push({ text: `Nummer ${i}${t.kategorie ? ', Kategorie laut Nutzer: ' + t.kategorie : ''}${t.name ? ', Bezeichnung: ' + t.name : ''}` });
           parts.push({ inline_data: { mime_type: 'image/jpeg', data: t.bild } });
         });
         const ergebnis = await gemini(env, parts, SCHEMA_MEHRERE);
