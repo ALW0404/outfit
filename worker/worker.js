@@ -170,7 +170,7 @@ function cors(env) {
   return {
     'Access-Control-Allow-Origin': erlaubt,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Geraet',
     'Access-Control-Max-Age': '86400'
   };
 }
@@ -179,18 +179,42 @@ const json = (daten, env, status = 200) =>
     status, headers: { 'Content-Type': 'application/json', ...cors(env) }
   });
 
-const heuteKey = () => 'tag:' + new Date().toISOString().slice(0, 10);
-
-async function verbrauch(env) {
-  if (!env.ZAEHLER) return 0;
-  return parseInt(await env.ZAEHLER.get(heuteKey()) || '0', 10);
-}
-async function zaehleHoch(env, um = 1) {
+/* ===== Zähler =====
+   Alle Geräte teilen sich Googles und Cloudflares Kontingente. Damit niemand den
+   anderen alles wegnimmt, gibt es neben dem Gesamtlimit eines je Gerät. Die App
+   schickt dafür eine zufällige Gerätekennung mit (keine persönlichen Daten). */
+const heute = () => new Date().toISOString().slice(0, 10);
+const heuteKey = () => 'tag:' + heute();
+const geraetKey = g => `tag:${heute()}:g:${g}`;
+const bildKey = g => g ? `bild:${heute()}:g:${g}` : `bild:${heute()}`;
+const geraetVon = request => {
+  const g = String(request.headers.get('X-Geraet') || '').toLowerCase();
+  return /^[a-z0-9]{6,40}$/.test(g) ? g : '';
+};
+const zahl = async (env, k) => env.ZAEHLER ? parseInt(await env.ZAEHLER.get(k) || '0', 10) : 0;
+async function plus(env, k, um) {
   if (!env.ZAEHLER) return;
-  const k = heuteKey();
-  const neu = (parseInt(await env.ZAEHLER.get(k) || '0', 10)) + um;
   /* 36 Stunden halten, dann räumt Cloudflare selbst auf */
-  await env.ZAEHLER.put(k, String(neu), { expirationTtl: 60 * 60 * 36 });
+  await env.ZAEHLER.put(k, String((await zahl(env, k)) + um), { expirationTtl: 60 * 60 * 36 });
+}
+const limits = env => ({
+  gesamt: parseInt(env.TAGESLIMIT || '150', 10),
+  geraet: parseInt(env.GERAET_LIMIT || '40', 10),
+  bilder: parseInt(env.BILD_LIMIT || '85', 10),             /* ≈ 10.000 Neurons, Cloudflares Gratiskontingent */
+  bilderGeraet: parseInt(env.BILD_LIMIT_GERAET || '40', 10)
+});
+
+async function verbrauch(env, geraet) {
+  return geraet ? zahl(env, geraetKey(geraet)) : zahl(env, heuteKey());
+}
+async function zaehleHoch(env, um = 1, geraet) {
+  await plus(env, heuteKey(), um);
+  if (geraet) await plus(env, geraetKey(geraet), um);
+}
+/* Bild-Einheiten: das schnelle Modell zählt 1, das genaue 14 (≈ Neurons-Verhältnis) */
+async function zaehleBild(env, einheiten, geraet) {
+  await plus(env, bildKey(), einheiten);
+  if (geraet) await plus(env, bildKey(geraet), einheiten);
 }
 
 /* Google stellt gerade von AIza- auf AQ-Schlüssel um. Für AQ wird teils der
@@ -271,7 +295,7 @@ async function gemini(env, teile, schema, temperatur = 0.2, modellWunsch) {
 }
 
 /* Eine Stylistin-Abfrage: aus App-Anfrage oder nächtlichem Auftrag */
-async function stylistErzeugen(env, body) {
+async function stylistErzeugen(env, body, geraet) {
   const teile = Array.isArray(body.teile) ? body.teile.slice(0, 220) : [];
   if (teile.length < 3) return { fehler: 'Zu wenige Teile' };
   const anzahl = Math.max(3, Math.min(20, parseInt(body.anzahl || 15, 10)));
@@ -307,7 +331,7 @@ async function stylistErzeugen(env, body) {
     beispiele(body.verworfen, 'Diese Kombinationen hat sie verworfen – solche Fehler nicht wiederholen:', 25);
   const ergebnis = await gemini(env, [{ text }], SCHEMA_STYLIST, 0.6,
     env.STYLIST_MODEL || STYLIST_MODELL);
-  await zaehleHoch(env);
+  await zaehleHoch(env, 1, geraet);
   return ergebnis;
 }
 
@@ -325,20 +349,25 @@ const NACHT_STUNDE = 4;           /* Ortszeit der Nutzerin */
    2 Uhr UTC ist in Japan Mittag. Die Zeitzone schickt die App mit. */
 async function nachtlauf(env, erzwingen) {
   if (!env.ZAEHLER || !env.GEMINI_KEY) return;
-  const schrank = await env.ZAEHLER.get('schrank', 'json');
+  const index = (await env.ZAEHLER.get('geraete', 'json')) || {};
+  for (const g of Object.keys(index)) await nachtlaufGeraet(env, g, erzwingen);
+}
+
+async function nachtlaufGeraet(env, g, erzwingen) {
+  const schrank = await env.ZAEHLER.get('schrank:' + g, 'json');
   if (!schrank || !Array.isArray(schrank.auftraege)) return;
   const tz = Number.isFinite(schrank.tz) ? schrank.tz : 120;
   const ort = new Date(Date.now() + tz * 60000);
   const ortTag = ort.toISOString().slice(0, 10);
-  const ergebnis = (await env.ZAEHLER.get('nacht', 'json')) || {};
+  const ergebnis = (await env.ZAEHLER.get('nacht:' + g, 'json')) || {};
   if (!erzwingen && (ort.getUTCHours() !== NACHT_STUNDE || ergebnis._lauf === ortTag)) return;
   ergebnis._lauf = ortTag;
-  await env.ZAEHLER.put('nacht', JSON.stringify(ergebnis));
-  const limit = parseInt(env.TAGESLIMIT || '10', 10);
+  await env.ZAEHLER.put('nacht:' + g, JSON.stringify(ergebnis));
+  const l = limits(env);
   for (const a of schrank.auftraege.slice(0, 6)) {
-    if (await verbrauch(env) >= limit) break;
+    if (await verbrauch(env) >= l.gesamt || await verbrauch(env, g) >= l.geraet) break;
     try {
-      const r = await stylistErzeugen(env, a.anfrage || {});
+      const r = await stylistErzeugen(env, a.anfrage || {}, g);
       const karte = a.karte || {};
       const outfits = (r.outfits || []).map(o => ({
         ids: (o.teile || []).map(c => karte[String(c).trim().toUpperCase()]),
@@ -348,7 +377,7 @@ async function nachtlauf(env, erzwingen) {
     } catch (e) {
       ergebnis[a.schluessel] = { ...(ergebnis[a.schluessel] || {}), fehler: String(e.message || e).slice(0, 200) };
     }
-    await env.ZAEHLER.put('nacht', JSON.stringify(ergebnis));
+    await env.ZAEHLER.put('nacht:' + g, JSON.stringify(ergebnis));
     await new Promise(r => setTimeout(r, NACHT_PAUSE_MS));
   }
 }
@@ -616,7 +645,9 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors(env) });
 
-    const limit = parseInt(env.TAGESLIMIT || '10', 10);
+    const geraet = geraetVon(request);
+    const l = limits(env);
+    const limit = l.gesamt;
 
     /* Wurzeladresse im Browser: zeigen, was der Dienst kann und ob er bereit ist.
        Vorher stand hier nur „Nur POST", was beim Einrichten unnötig verunsichert. */
@@ -653,14 +684,19 @@ export default {
         bereit: !!env.GEMINI_KEY,
         heute: await verbrauch(env),
         limit,
+        bilder: { heute: await zahl(env, bildKey()), limit: l.bilder },
+        geraet: geraet ? { heute: await verbrauch(env, geraet), limit: l.geraet,
+          bilder: await zahl(env, bildKey(geraet)), bilderLimit: l.bilderGeraet } : null,
         modell: env.GEMINI_MODEL || STANDARD_MODELL,
         stylistModell: env.STYLIST_MODEL || STYLIST_MODELL,
         produktfoto: !!env.AI || env.BILDER === 'an',
         bildAnbieter: env.BILD_ANBIETER || (env.AI ? 'flux' : 'gemini'),
         nacht: env.ZAEHLER ? await (async () => {
-          const n = (await env.ZAEHLER.get('nacht', 'json')) || {};
-          const s = await env.ZAEHLER.get('schrank', 'json');
-          return { abgelegt: s ? s.abgelegt : null, tz: s ? s.tz : null, auftraege: s ? s.auftraege.length : 0,
+          const index = (await env.ZAEHLER.get('geraete', 'json')) || {};
+          if (!geraet) return { geraete: Object.keys(index).length };
+          const n = (await env.ZAEHLER.get('nacht:' + geraet, 'json')) || {};
+          const s = await env.ZAEHLER.get('schrank:' + geraet, 'json');
+          return { geraete: Object.keys(index).length, abgelegt: s ? s.abgelegt : null, tz: s ? s.tz : null, auftraege: s ? s.auftraege.length : 0,
             letzterLauf: n._lauf || null,
             ergebnisse: Object.fromEntries(Object.entries(n).filter(([k]) => !k.startsWith('_')).map(([k, v]) =>
               [k, v.fehler ? 'Fehler' : `${(v.outfits || []).length} Outfits vom ${v.datum}`])) };
@@ -715,8 +751,9 @@ export default {
 
     if (url.pathname === '/schrank' || url.pathname === '/nacht') {
       if (!env.ZAEHLER) return json({ fehler: 'KV-Bindung ZAEHLER fehlt' }, env, 500);
+      if (!geraet) return json({ fehler: 'Gerätekennung fehlt' }, env, 400);
       if (url.pathname === '/nacht') {
-        return json((await env.ZAEHLER.get('nacht', 'json')) || {}, env);
+        return json((await env.ZAEHLER.get('nacht:' + geraet, 'json')) || {}, env);
       }
       const roh = await request.text();
       if (roh.length > 400000) return json({ fehler: 'Zu groß' }, env, 413);
@@ -724,13 +761,28 @@ export default {
       try { s = JSON.parse(roh); } catch { return json({ fehler: 'Ungültiger Rumpf' }, env, 400); }
       if (!Array.isArray(s.auftraege)) return json({ fehler: 'Feld "auftraege" fehlt' }, env, 400);
       const tz = Number.isFinite(s.tz) ? Math.max(-720, Math.min(840, s.tz)) : null;
-      await env.ZAEHLER.put('schrank', JSON.stringify({ abgelegt: new Date().toISOString(), tz, auftraege: s.auftraege.slice(0, 6) }));
+      await env.ZAEHLER.put('schrank:' + geraet, JSON.stringify({ abgelegt: new Date().toISOString(), tz, auftraege: s.auftraege.slice(0, 6) }));
+      /* Verzeichnis der Geräte für den Nachtlauf; 30 Tage ohne Lebenszeichen fliegen raus */
+      const index = (await env.ZAEHLER.get('geraete', 'json')) || {};
+      index[geraet] = heute();
+      const grenze = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+      for (const [k, d] of Object.entries(index)) if (d < grenze) delete index[k];
+      await env.ZAEHLER.put('geraete', JSON.stringify(index));
       return json({ ok: true }, env);
     }
 
-    const genutzt = await verbrauch(env);
-    if (genutzt >= limit) {
-      return json({ fehler: 'Tageskontingent aufgebraucht', heute: genutzt, limit }, env, 429);
+    if (url.pathname === '/produktfoto') {
+      if (await zahl(env, bildKey()) >= l.bilder || (geraet && await zahl(env, bildKey(geraet)) >= l.bilderGeraet)) {
+        return json({ fehler: 'Für heute sind die kostenlosen Produktfotos aufgebraucht. Morgen geht es weiter.' }, env, 429);
+      }
+    } else {
+      const genutzt = await verbrauch(env);
+      if (genutzt >= limit) {
+        return json({ fehler: 'Tageskontingent aufgebraucht', heute: genutzt, limit }, env, 429);
+      }
+      if (geraet && await verbrauch(env, geraet) >= l.geraet) {
+        return json({ fehler: 'Tageskontingent für dieses Gerät aufgebraucht', limit: l.geraet }, env, 429);
+      }
     }
 
     let body;
@@ -745,7 +797,7 @@ export default {
                   (body.name ? ` Eigene Bezeichnung: ${body.name}.` : '') },
           { inline_data: { mime_type: 'image/jpeg', data: body.bild } }
         ], SCHEMA_TEIL);
-        await zaehleHoch(env);
+        await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }
 
@@ -758,12 +810,12 @@ export default {
           parts.push({ inline_data: { mime_type: 'image/jpeg', data: t.bild } });
         });
         const ergebnis = await gemini(env, parts, SCHEMA_MEHRERE);
-        await zaehleHoch(env);
+        await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }
 
       if (url.pathname === '/stylist') {
-        const ergebnis = await stylistErzeugen(env, body);
+        const ergebnis = await stylistErzeugen(env, body, geraet);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
         return json(ergebnis, env);
       }
@@ -771,21 +823,21 @@ export default {
       if (url.pathname === '/shopping') {
         const ergebnis = await shopping(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
-        await zaehleHoch(env);
+        await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }
 
       if (url.pathname === '/haufen') {
         const ergebnis = await haufen(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
-        await zaehleHoch(env);
+        await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }
 
       if (url.pathname === '/umriss') {
         const ergebnis = await umriss(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
-        await zaehleHoch(env);
+        await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }
 
@@ -793,7 +845,8 @@ export default {
         const ergebnis = await produktfoto(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
         /* FLUX läuft im eigenen Cloudflare-Kontingent, nicht in Googles Tagesgrenze */
-        if (!String(ergebnis.modell || '').startsWith('@cf/')) await zaehleHoch(env);
+        if (String(ergebnis.modell || '').startsWith('@cf/')) await zaehleBild(env, /9b/.test(ergebnis.modell) ? 14 : 1, geraet);
+        else await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }
 
@@ -804,7 +857,7 @@ export default {
           { text: PROMPT_PROFIL },
           ...bilder.map(b => ({ inline_data: { mime_type: 'image/jpeg', data: b } }))
         ], SCHEMA_PROFIL);
-        await zaehleHoch(env);
+        await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }
 

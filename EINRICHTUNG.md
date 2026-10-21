@@ -213,6 +213,23 @@ Umschaltbar über Variablen am Worker:
 gegenüber Nutzern nur den bezahlten Gemini-Zugang – dann Abrechnung im Google-Projekt einschalten.
 FLUX über Cloudflare ist auch kommerziell nutzbar.
 
+# Mehrere Personen
+
+Alle teilen sich einen Worker und damit Googles und Cloudflares Gratis-Kontingente. Jede App schickt
+eine zufällige Gerätekennung mit (`X-Geraet`); der Worker zählt damit je Gerät und führt den Nachtlauf
+für jedes Gerät einzeln aus (KV: `schrank:<gerät>`, `nacht:<gerät>`, Verzeichnis `geraete`).
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `TAGESLIMIT` | 150 | Gemini-Abfragen am Tag, alle Geräte zusammen |
+| `GERAET_LIMIT` | 40 | Gemini-Abfragen am Tag je Gerät |
+| `BILD_LIMIT` | 85 | Produktfoto-Einheiten am Tag, alle (≈ 10.000 Neurons; „Genauer" zählt 14) |
+| `BILD_LIMIT_GERAET` | 40 | Produktfoto-Einheiten je Gerät |
+
+Den Verbrauch zeigt die App im Entwicklermodus unter *Daten → Verbrauch heute*.
+Engpass bleibt die Stylistin auf dem großen Modell (≈ 20 Abfragen am Tag bei Google, für alle);
+ist es erschöpft, springt sie automatisch auf das Lite-Modell.
+
 # Wie viel ist kostenlos?
 
 Google veröffentlicht **keine allgemeingültige Tabelle mehr**. Deine eigenen Werte stehen unter

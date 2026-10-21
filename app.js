@@ -1455,6 +1455,15 @@ const dienstUrl = () =>
   (((DB.prefs && DB.prefs.worker) || STANDARD_WORKER) || '').replace(/\/+$/, '');
 const entwicklermodus = () => !!(DB.prefs && DB.prefs.entwickler);
 
+/* Zufällige Kennung dieses Geräts – damit der Dienst Kontingente und den Nachtlauf
+   je Person trennen kann. Enthält nichts Persönliches. */
+function geraetId() {
+  DB.prefs = DB.prefs || {};
+  if (!DB.prefs.geraet) { DB.prefs.geraet = (uid() + uid()).replace(/[^a-z0-9]/g, '').slice(0, 24); save(); }
+  return DB.prefs.geraet;
+}
+const dienstKopf = () => ({ 'Content-Type': 'application/json', 'X-Geraet': geraetId() });
+
 /* Fürs Analysieren reichen 512 px – spart Übertragung und Kosten */
 async function bildFuerAnalyse(picId, max = 512) {
   const blob = await picGet(picId);
@@ -1480,7 +1489,7 @@ async function kiAnalyse(item) {
   const bild = await bildFuerAnalyse(item.picId);
   const res = await fetch(basis + '/analyse', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: dienstKopf(),
     body: JSON.stringify({ bild, kategorie: CATS[item.cat].label, name: item.name || '' })
   });
   return await antwortLesen(res);
@@ -1513,7 +1522,7 @@ async function kiAnalyseMehrere(items) {
     teile.push({ bild: await bildFuerAnalyse(it.picId), kategorie: CATS[it.cat].label, name: it.name || '' });
   }
   const res = await fetch(basis + '/analyse-mehrere', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: dienstKopf(),
     body: JSON.stringify({ teile })
   });
   if (res.status === 404) { const e = new Error('Sammelabfrage nicht unterstützt'); e.alt = true; throw e; }
@@ -1593,7 +1602,7 @@ async function kiStilprofil() {
   if (bilder.length < 3) throw new Error('Mindestens drei Pins nötig');
   const res = await fetch(basis + '/stilprofil', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: dienstKopf(),
     body: JSON.stringify({ bilder })
   });
   const p = await antwortLesen(res);
@@ -1724,7 +1733,7 @@ async function kiStylist(season, mood) {
   if (!basis) throw new Error('Kein KI-Dienst eingerichtet');
   const { anfrage, zurueck } = stylistAnfrage(season, mood);
   const res = await fetch(basis + '/stylist', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: dienstKopf(),
     body: JSON.stringify(anfrage)
   });
   const j = await antwortLesen(res);
@@ -1789,7 +1798,7 @@ async function schrankAblegen() {
   if (rumpf === _schrankStand) return;         /* nichts geändert – nicht erneut senden */
   try {
     const res = await fetch(basis + '/schrank', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: rumpf });
+      method: 'POST', headers: dienstKopf(), body: rumpf });
     if (res.ok) _schrankStand = rumpf;
   } catch (e) { console.warn('Schrank ablegen:', e); }
 }
@@ -1802,7 +1811,7 @@ async function nachtAbholen() {
     const ab = new AbortController();
     const uhr = setTimeout(() => ab.abort(), 6000);
     const res = await fetch(basis + '/nacht', { signal: ab.signal,
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      method: 'POST', headers: dienstKopf(), body: '{}' });
     clearTimeout(uhr);
     if (!res.ok) return;
     const n = await res.json();
@@ -1945,7 +1954,7 @@ function render() {
   renderOverlay();
   attachSwipe();
   UI._neueKarte = false;
-  if (UI.tab === 'data' && !UI.sorting && !UI.builder) showUsage();
+  if (UI.tab === 'data' && !UI.sorting && !UI.builder) { showUsage(); if (entwicklermodus()) zeigeVerbrauch(); }
   saveUI();
 }
 
@@ -2406,7 +2415,9 @@ function renderData() {
   </div>
   <p class="small" id="optout" style="margin:4px"></p>
 
-  ${entwicklermodus() ? `<h3 class="abschnitt">KI-Dienst</h3>
+  ${entwicklermodus() ? `<h3 class="abschnitt">Verbrauch heute</h3>
+  <div class="liste" id="verbrauch"><div class="zeile-l ohne-ico"><span class="ltext small">Wird abgefragt …</span></div></div>
+  <h3 class="abschnitt">KI-Dienst</h3>
   <div class="card">
     <label class="fld">Worker-Adresse
       <input type="text" value="${esc((DB.prefs && DB.prefs.worker) || '')}"
@@ -2513,7 +2524,7 @@ let _dienst = null;
 async function dienstFaehigkeiten() {
   if (_dienst || !dienstUrl()) return _dienst;
   try {
-    const r = await fetch(dienstUrl() + '/status');
+    const r = await fetch(dienstUrl() + '/status', { headers: { 'X-Geraet': geraetId() } });
     if (r.ok) _dienst = await r.json();
   } catch (e) {}
   return _dienst;
@@ -2647,7 +2658,7 @@ async function nachbilden(cv, box, kat, beschreibung, qualitaet, extra = {}) {
   const kernCv = kern ? ausschnittCanvas(cv, kern, 0) : null;
   const detail = kernCv && Math.min(kernCv.width, kernCv.height) >= 48 ? await studioBild64(aufMass(kernCv, 256), 512) : '';
   const res = await fetch(dienstUrl() + '/produktfoto', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: dienstKopf(),
     body: JSON.stringify({ bild, detail, kategorie: TEIL_NAME[kat], kategorieEn: KAT_EN[kat],
       beschreibung: beschreibung || '', farbe: extra.farbe || '', muster: extra.muster || '',
       qualitaet: qualitaet || 'schnell' })
@@ -2663,7 +2674,7 @@ async function vomWeissLoesen(cv) {
 }
 const bildFehler = e => {
   const m = String((e && e.message) || e || '');
-  if (/Workers AI|neuron|daily|4006|capacity/i.test(m)) return 'Für heute sind die kostenlosen Produktfotos aufgebraucht. Morgen geht es weiter.';
+  if (/Workers AI|neuron|daily|4006|capacity|Produktfotos aufgebraucht/i.test(m)) return 'Für heute sind die kostenlosen Produktfotos aufgebraucht. Morgen geht es weiter.';
   const t = fehlerText(e);
   return /Stilanalyse/.test(t) ? 'Das Produktfoto ließ sich gerade nicht erzeugen. Versuch es gleich noch einmal.' : t;
 };
@@ -3291,7 +3302,7 @@ App.studioTeil = async kat => {
   try {
     const bild = await studioBild64(s.original || s.gross);
     const res = await fetch(dienstUrl() + '/umriss', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: dienstKopf(),
       body: JSON.stringify({ bild, kategorie: TEIL_NAME[kat] })
     });
     const j = await antwortLesen(res);
@@ -3374,7 +3385,7 @@ async function openHaufen(file, wunsch) {
     UI.haufen = { bild, foto: daumen(bild, 700), status: 'erkennen', teile: [], wunsch: !!wunsch };
     UI.modal = 'haufen'; render();
     const res = await fetch(dienstUrl() + '/haufen', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: dienstKopf(),
       body: JSON.stringify({ bild: await studioBild64(bild, 1280), getragen: !!wunsch })
     });
     const j = await antwortLesen(res);
@@ -3765,7 +3776,7 @@ App.testWorker = async () => {
   const basis = dienstUrl();
   if (!basis) { kiStatus = 'Keine Adresse eingetragen.'; render(); return; }
   try {
-    const res = await fetch(basis + '/status');
+    const res = await fetch(basis + '/status', { headers: { 'X-Geraet': geraetId() } });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { kiStatus = 'Der Dienst antwortet nicht richtig.'; kiDetail = 'HTTP ' + res.status; render(); return; }
 
@@ -4057,6 +4068,23 @@ App.wipe = async () => {
   UI.queue = null; UI.sorting = false;
   render();
 };
+
+/* Was heute schon von den gemeinsamen Kontingenten verbraucht ist */
+async function zeigeVerbrauch() {
+  const el = $('#verbrauch');
+  if (!el || !dienstUrl()) return;
+  try {
+    const d = await (await fetch(dienstUrl() + '/status', { headers: { 'X-Geraet': geraetId() } })).json();
+    const zeile = (titel, wert, klein) => `<div class="zeile-l ohne-ico"><span class="ltext">${titel}${klein ? `<small>${klein}</small>` : ''}</span><span class="lwert">${wert}</span></div>`;
+    const g = d.geraet || {};
+    el.innerHTML = zeile('KI-Abfragen, alle Geräte', `${d.heute} / ${d.limit}`, 'Analyse, Erkennung, Stylistin')
+      + zeile('davon dieses Gerät', `${g.heute ?? '–'} / ${g.limit ?? '–'}`)
+      + zeile('Produktfotos, alle Geräte', `${d.bilder ? d.bilder.heute : '–'} / ${d.bilder ? d.bilder.limit : '–'}`, '„Genauer" zählt 14')
+      + zeile('davon dieses Gerät', `${g.bilder ?? '–'} / ${g.bilderLimit ?? '–'}`)
+      + zeile('Geräte im Nachtlauf', d.nacht ? d.nacht.geraete : '–',
+        d.nacht && d.nacht.letzterLauf ? `Dein letzter Lauf: ${fmtDate(d.nacht.letzterLauf)}` : '');
+  } catch (e) { el.innerHTML = '<div class="zeile-l ohne-ico"><span class="ltext small">Nicht abrufbar.</span></div>'; }
+}
 
 async function showUsage() {
   const el = $('#usage');
