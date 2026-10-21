@@ -234,6 +234,10 @@ genau (Art, Farben, Abstand, Richtung). Dem Bildmodell geht zusätzlich eine Nah
 des Teils mit. Danach misst die App die Stofffarbe im Originalfoto und schiebt das Ergebnis dorthin –
 das Bildmodell hellte sonst gern auf (sandbeige wurde fast weiß).
 
+**Mehrere Teile auswählen.** Im Schrank ein Teil kurz gedrückt halten (oder oben *Auswählen*), dann
+weitere antippen. Unten erscheinen *Alle*, *Teilen* (Produktbilder als PNG über das Teilen-Menü) und
+*Löschen*. *Fertig* beendet die Auswahl.
+
 **Gelöschte Teile in Outfits.** Steckt ein Teil in gemerkten Outfits, wird es beim Löschen nicht
 entfernt, sondern als „nicht mehr da" markiert: im Outfit blass mit rotem Symbol, das Outfit selbst mit
 rotem Rand und im Filter *Nicht mehr komplett*. Wird das letzte Outfit mit dem Teil gelöscht,

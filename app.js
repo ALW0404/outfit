@@ -1884,7 +1884,9 @@ function segHTML(name, optionen, aktiv, aufruf) {
 function kopfAktionen() {
   if (UI.sorting) return `<button class="kopfknopf" onclick="App.stopSort()">Fertig</button>`;
   if (UI.builder) return `<button class="kopfknopf" onclick="App.closeBuilder()">Abbrechen</button>`;
-  if (UI.tab === 'closet') return `<button class="kopfknopf dunkel rund" onclick="App.aktion('neu')" aria-label="Teil hinzufügen">${ico('plus')}</button>`;
+  if (UI.tab === 'closet' && UI.auswahl) return `<button class="kopfknopf" onclick="App.auswahlEnde()">Fertig</button>`;
+  if (UI.tab === 'closet') return `<button class="kopfknopf" onclick="App.auswahlStart()">Auswählen</button>
+    <button class="kopfknopf dunkel rund" onclick="App.aktion('neu')" aria-label="Teil hinzufügen">${ico('plus')}</button>`;
   if (UI.tab === 'outfits') return `<button class="kopfknopf dunkel rund" onclick="App.newOutfit()" aria-label="Eigene Kombination">${ico('plus')}</button>`;
   if (UI.tab === 'trends') return `<button class="kopfknopf dunkel rund" onclick="App.aktion('pin')" aria-label="Pin hinzufügen">${ico('plus')}</button>`;
   return '';
@@ -2130,6 +2132,15 @@ function renderCloset() {
   const stodo = seasonTodoCount();
   const ohneKi = eigene().filter(i => !istAnalysiert(i)).length;
   const nWunsch = wuensche().length;
+  if (UI.auswahl) return `<h1 class="grosstitel">${UI.auswahl.size} ausgewählt</h1>
+  <p class="untertitel">Tippe weitere Teile an.</p>
+  <div id="schrank-grid">${schrankGridHTML()}</div>
+  <div style="height:70px"></div>
+  <div class="auswahlleiste">
+    <button class="btn" onclick="App.auswahlAlle()">${ico('check')} Alle</button>
+    <button class="btn" onclick="App.auswahlTeilen()" ${UI.auswahl.size ? '' : 'disabled'}>${ico('upload')} Teilen</button>
+    <button class="btn loeschen" onclick="App.auswahlLoeschen()" ${UI.auswahl.size ? '' : 'disabled'}>${ico('trash')} Löschen</button>
+  </div>`;
   return `<h1 class="grosstitel">Schrank</h1>
   ${stodo ? `<button class="banner" onclick="App.startSort('season')">
     <span class="ico">${ico('leaf')}</span>
@@ -2181,7 +2192,14 @@ function schrankGridHTML() {
 function tileHTML(it, onclick) {
   /* Nur echte Strings zählen: bei map(tileHTML) käme sonst der Index als onclick an */
   const action = typeof onclick === 'string' ? onclick : `App.editItem('${it.id}')`;
-  return `<div class="tile${it.geloescht ? ' weg' : ''}" role="button" onclick="${it.geloescht ? '' : action}">
+  /* Im Schrank: lange drücken startet die Auswahl, dann wählt jeder Tipp aus */
+  const imSchrank = typeof onclick !== 'string';
+  const wahl = imSchrank && UI.auswahl;
+  const gewaehlt = wahl && UI.auswahl.has(it.id);
+  return `<div class="tile${it.geloescht ? ' weg' : ''}${wahl ? ' waehlbar' : ''}${gewaehlt ? ' gewaehlt' : ''}" role="button"
+    ${imSchrank ? `data-id="${it.id}"` : ''}
+    onclick="${it.geloescht ? '' : wahl ? `App.auswahlTipp('${it.id}')` : `if (!App.langGedrueckt()) ${action}`}">
+    ${wahl ? `<span class="wahl">${gewaehlt ? ico('check') : ''}</span>` : ''}
     ${it.needsSort ? '<span class="dot" title="Unterkategorie fehlt"></span>' : ''}
     ${!it.wunsch && istUngenutzt(it.id) ? '<span class="flag" title="In keiner gemerkten Kombination"></span>' : ''}
     <div class="thumbwrap"><img data-pic="${it.picId}" alt="${esc(it.name || '')}"></div>
@@ -2942,7 +2960,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.remove(), 2600);
 }
 
-App.setTab = tab => { UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; UI.queue = null; UI.detail = null;
+App.setTab = tab => { UI.auswahl = null; UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; UI.queue = null; UI.detail = null;
 UI.studio = null;
 UI.seasonDraft = null; UI.seasonDraftId = null; render(); };
 App.filterCloset = c => { UI.closetFilter = c; render(); };
@@ -3068,6 +3086,92 @@ function shopLinks(it) {
     ['Vinted · gebraucht', `https://www.vinted.de/catalog?search_text=${q}`]
   ];
 }
+
+/* ---- Mehrfachauswahl im Schrank ---- */
+let _langZeit = null, _langStart = null, _langGefeuert = false;
+App.langGedrueckt = () => { const g = _langGefeuert; _langGefeuert = false; return g; };
+document.addEventListener('pointerdown', e => {
+  const t = e.target.closest && e.target.closest('#schrank-grid .tile[data-id]');
+  if (!t || UI.auswahl) return;
+  _langStart = { x: e.clientX, y: e.clientY };
+  clearTimeout(_langZeit);
+  _langZeit = setTimeout(() => {
+    _langGefeuert = true;
+    if (navigator.vibrate) navigator.vibrate(12);
+    UI.auswahl = new Set([t.dataset.id]);
+    render();
+  }, 550);
+});
+const _langAbbruch = () => { clearTimeout(_langZeit); _langZeit = null; };
+document.addEventListener('pointerup', _langAbbruch);
+document.addEventListener('pointercancel', _langAbbruch);
+document.addEventListener('pointermove', e => {
+  if (_langStart && Math.hypot(e.clientX - _langStart.x, e.clientY - _langStart.y) > 10) _langAbbruch();
+});
+/* iOS-Bildmenü beim langen Drücken unterdrücken */
+document.addEventListener('contextmenu', e => { if (e.target.closest && e.target.closest('#schrank-grid .tile')) e.preventDefault(); });
+
+App.auswahlStart = () => { UI.auswahl = new Set(); render(); };
+App.auswahlEnde = () => { UI.auswahl = null; render(); };
+App.auswahlTipp = id => {
+  if (!UI.auswahl || App.langGedrueckt()) return;   /* der Klick nach dem langen Drücken zählt nicht */
+  UI.auswahl.has(id) ? UI.auswahl.delete(id) : UI.auswahl.add(id);
+  render();
+};
+App.auswahlAlle = () => {
+  const sichtbar = [...document.querySelectorAll('#schrank-grid .tile[data-id]')].map(t => t.dataset.id);
+  const alle = sichtbar.every(id => UI.auswahl.has(id));
+  sichtbar.forEach(id => alle ? UI.auswahl.delete(id) : UI.auswahl.add(id));
+  render();
+};
+App.auswahlLoeschen = async () => {
+  const ids = [...(UI.auswahl || [])];
+  if (!ids.length) return;
+  const inOutfits = ids.filter(id => DB.outfits.some(o => o.ids.includes(id))).length;
+  if (!confirm(`${ids.length} ${ids.length === 1 ? 'Teil' : 'Teile'} löschen?` +
+    (inOutfits ? ` ${inOutfits} davon ${inOutfits === 1 ? 'steckt' : 'stecken'} in Outfits und ${inOutfits === 1 ? 'bleibt' : 'bleiben'} dort als „nicht mehr da" sichtbar.` : ''))) return;
+  const weg = [];
+  for (const id of ids) {
+    const it = itemById(id);
+    if (!it) continue;
+    if (DB.outfits.some(o => o.ids.includes(id))) { it.geloescht = true; it.geloeschtAm = todayISO(); }
+    else weg.push(it);
+  }
+  DB.items = DB.items.filter(i => !weg.includes(i));
+  save();
+  UI.auswahl = null; UI.queue = null;
+  render();
+  toast(`${ids.length} ${ids.length === 1 ? 'Teil' : 'Teile'} gelöscht`);
+  for (const i of weg) { dropPicURL(i.picId); await picDel(i.picId).catch(() => {}); }
+};
+/* Teilen: Produktbilder als PNG über das Teilen-Menü (AirDrop, Nachrichten, Fotos …) */
+App.auswahlTeilen = async () => {
+  const ids = [...(UI.auswahl || [])].slice(0, 30);
+  if (!ids.length) return;
+  toast('Bilder werden vorbereitet …');
+  const dateien = [];
+  for (const id of ids) {
+    const it = itemById(id);
+    const blob = it && await picGet(it.picId).catch(() => null);
+    if (!blob) continue;
+    try {
+      const img = await loadImg(URL.createObjectURL(blob));
+      const cv = document.createElement('canvas');
+      cv.width = img.width; cv.height = img.height;
+      cv.getContext('2d').drawImage(img, 0, 0);
+      const png = await canvasToBlob(cv, 'image/png');
+      const name = String(it.name || CATS[it.cat].label).replace(/[^\wäöüÄÖÜß -]/g, '').trim() || 'Teil';
+      dateien.push(new File([png], `${name}.png`, { type: 'image/png' }));
+    } catch (e) { console.warn(e); }
+  }
+  document.querySelector('.toast')?.remove();
+  if (!dateien.length) return;
+  if (navigator.canShare && navigator.canShare({ files: dateien })) {
+    try { await navigator.share({ files: dateien }); } catch (e) { /* abgebrochen */ }
+  } else {
+    dateien.forEach(f => { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); });
+  }
+};
 
 App.teilAusOutfit = id => { UI.detail = null; App.editItem(id); };
 App.stylistNeu = () => stylistHolen(true);

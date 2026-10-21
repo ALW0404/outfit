@@ -685,6 +685,24 @@ img[data-pic].laedt{opacity:0;}
 .hkat{font-size:11.5px; color:var(--ink-3); margin:0 2px;}
 .hteil .linkbtn{font-size:12.5px; padding:2px 0;}
 
+/* Mehrfachauswahl im Schrank */
+#schrank-grid .tile, #schrank-grid .tile img{-webkit-touch-callout:none; -webkit-user-select:none; user-select:none;}
+.tile .wahl{position:absolute; top:7px; right:7px; z-index:3; width:24px; height:24px; border-radius:50%;
+  border:2px solid #fff; background:rgba(23,19,17,.18); box-shadow:0 1px 3px rgba(0,0,0,.25);
+  display:flex; align-items:center; justify-content:center; color:#fff;}
+.tile.gewaehlt .wahl{background:var(--accent); border-color:var(--accent);}
+.tile .wahl .i{width:14px; height:14px; stroke-width:2.8;}
+.tile.gewaehlt .thumbwrap{box-shadow:0 0 0 3px var(--accent) inset;}
+.tile.waehlbar:not(.gewaehlt) .thumbwrap{opacity:.85;}
+.auswahlleiste{position:fixed; z-index:41; left:50%; transform:translateX(-50%);
+  bottom:calc(84px + var(--bottom)); width:min(calc(100% - 28px), 420px);
+  display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; padding:8px;
+  background:var(--glass); -webkit-backdrop-filter:saturate(1.8) blur(22px); backdrop-filter:saturate(1.8) blur(22px);
+  border:0.5px solid var(--glass-line); border-radius:24px; box-shadow:var(--shadow-3);
+  animation:toastrein .4s var(--spring);}
+.auswahlleiste .btn{min-height:44px; padding:8px 10px; font-size:14px; background:var(--surface);}
+.auswahlleiste .btn.loeschen{color:var(--red);}
+
 /* Gelöschte Teile in Outfits */
 .cpiece.weg img{opacity:.42; filter:grayscale(.7);}
 .weg-marke{position:absolute; top:4%; right:4%; width:22px; height:22px; border-radius:50%; background:var(--red); color:#fff;
