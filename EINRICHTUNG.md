@@ -190,22 +190,28 @@ leer sein.
 
 ---
 
-# Teil 5 · Nachbilden freischalten (optional, kostet Geld)
+# Teil 5 · Produktfotos (Nachbilden)
 
-„Als Produktfoto nachbilden" nutzt ein Bildmodell von Gemini. Das ist im kostenlosen Tarif
-gesperrt (Kontingent 0) und braucht ein Projekt mit Abrechnung. Grob **4–7 Cent je Bild**;
-alle 172 Teile einmal nachbilden läge bei etwa 7–12 Euro, danach nur noch neue Teile.
+Läuft **kostenlos** über Cloudflare Workers AI mit dem Bildmodell **FLUX.2 [klein] 4B**. Der Worker
+hat dafür die Bindung `AI` (Typ *Workers AI*). Ein Produktfoto kostet rund 110 Neurons, im
+kostenlosen Tageskontingent von 10.000 Neurons stecken also etwa **90 Bilder pro Tag**. Darüber
+hinaus (nur mit Workers Paid, 5 $/Monat) etwa 0,1 Cent je Bild.
 
-Damit die Text-Abfragen (Analyse, Stylistin, Umriss) kostenlos bleiben, bekommt das Nachbilden
-einen **eigenen Schlüssel aus einem eigenen Projekt**:
+Ablauf: Gemini (kostenloses Textmodell) erkennt das Teil, liefert Umriss, Namen und eine
+Beschreibung; FLUX bildet aus dem Ausschnitt plus Beschreibung das Produktfoto. Ohne Ausschnitt
+und Beschreibung erfand FLUX Details (Rock mit Knopf statt Gummibund).
 
-1. <https://aistudio.google.com/api-keys> → **Create API key** → **Create project**,
-   Name `outfit-bilder`.
-2. Bei diesem Projekt **Set up billing** und die Zahlungsdaten hinterlegen. Am besten in der
-   Google-Cloud-Konsole unter *Abrechnung → Budgets* ein Budget mit Warnung setzen, etwa 10 €.
-3. Den Schlüssel im Cloudflare-Worker unter **Settings → Variables and Secrets** als
-   **Secret** `BILD_KEY` anlegen. Nicht in die App, nicht in den Chat.
-4. Kurz Bescheid geben – dann wird `BILDER = an` gesetzt, und der Knopf erscheint im Studio.
+Umschaltbar über Variablen am Worker:
+
+| Variable | Wirkung |
+|---|---|
+| `BILD_ANBIETER` | `flux` (Standard) oder `gemini` |
+| `BILD_KEY` | eigener Gemini-Schlüssel aus einem Projekt mit Abrechnung – Gemini-Bildmodelle sind im kostenlosen Tarif gesperrt |
+| `HAUFEN_MODEL`, `UMRISS_MODEL` | anderes Textmodell für Erkennung und Umriss |
+
+**Zum Launch im App Store:** Googles Bedingungen erlauben in der EU, der Schweiz und Großbritannien
+gegenüber Nutzern nur den bezahlten Gemini-Zugang – dann Abrechnung im Google-Projekt einschalten.
+FLUX über Cloudflare ist auch kommerziell nutzbar.
 
 # Wie viel ist kostenlos?
 

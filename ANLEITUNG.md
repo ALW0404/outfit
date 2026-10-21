@@ -215,10 +215,17 @@ die feinen Kanten kommen vom Modell auf dem Gerät. Das Teil wird auch gleich in
 Kategorie einsortiert. Kostet eine Abfrage aus dem kostenlosen Kontingent und dauert je nach
 Auslastung bei Google wenige Sekunden bis etwa eine Minute.
 
-**Als Produktfoto nachbilden** (nur wenn freigeschaltet, siehe `EINRICHTUNG.md`, Teil 5): Die KI
-erzeugt aus dem Alltagsfoto ein sauberes Shop-Foto – glatt, ohne Falten, Person und Bügel. Das ist
-eine **Nachbildung**, nicht mehr dein Foto; im Teil steht deshalb „Von der KI als Produktfoto
-nachgebildet". *Zurück zu meinem Foto* macht es rückgängig.
+**Produktfoto.** Hast du angetippt, was es ist, bildet die KI das Teil gleich als Shop-Foto nach:
+glatt, frische Farben, ohne Person, Bügel und Schatten. Das ist eine **Nachbildung**, nicht mehr dein
+Foto – im Teil steht deshalb „Von der KI als Produktfoto nachgebildet". *Neu erzeugen* versucht es
+noch einmal, *Mein Foto verwenden* nimmt stattdessen den Ausschnitt aus deinem Foto. Kostenlos,
+etwa 90 Bilder pro Tag.
+
+**Mehrere Teile auf einem Foto.** Im Schrank über „+" → *Mehrere Teile auf einem Foto*: Leg Teile
+nebeneinander aufs Bett und fotografiere sie zusammen. Die App findet jedes Teil (Kategorie und
+Name), du hakst ab, welche in den Schrank sollen, und jedes wird zum Produktfoto. Danach prüfst du
+die Bilder, erzeugst einzelne neu oder lässt sie weg. Je weniger die Teile übereinanderliegen, desto
+treuer das Ergebnis – Verdecktes muss die KI ergänzen.
 
 ## Teile erfassen – der schnelle Weg
 

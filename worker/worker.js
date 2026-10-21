@@ -377,16 +377,70 @@ Schnitt). Nichts hinzufügen, nichts weglassen, nichts umgestalten.`;
    Kein Nachbilden: Gemini sagt nur, WO das gemeinte Teil im Foto liegt – als Umriss
    aus Punkten. Ausgeschnitten wird in der App aus den Originalpixeln, die feinen
    Kanten liefert das Freistell-Modell. Pixelmasken von Gemini dauerten über 100 s. */
-const UMRISS_MODELLE = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
+/* Lite zuerst: das große Modell brauchte mit Umriss, Name und Beschreibung über eine Minute */
+const UMRISS_MODELLE = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
 const SCHEMA_UMRISS = {
   type: 'OBJECT',
   properties: {
     gefunden: { type: 'BOOLEAN' },
     box_2d: { type: 'ARRAY', items: { type: 'INTEGER' } },
-    umriss: { type: 'ARRAY', items: { type: 'ARRAY', items: { type: 'INTEGER' } } }
+    umriss: { type: 'ARRAY', items: { type: 'ARRAY', items: { type: 'INTEGER' } } },
+    name: { type: 'STRING' },
+    beschreibung: { type: 'STRING' }
   },
-  required: ['gefunden', 'box_2d', 'umriss']
+  required: ['gefunden', 'box_2d', 'umriss', 'name', 'beschreibung']
 };
+
+/* Beschreibung für das Nachbilden: Ohne sie erfindet das Bildmodell Details –
+   aus einem Rock mit Gummibund wurde einer mit Knopf und Bundfalten. */
+const BESCHREIBUNG_HINWEIS = `name: kurzer deutscher Name wie im Shop, Art + Farbe, etwa "Ballonrock Schwarz" oder "Blouson Beige mit Karo-Aufschlag".
+beschreibung: auf Englisch, 20–40 Wörter, nur Sichtbares: exakte Farbe, Material/Optik, Muster, Schnitt und Passform,
+Länge (z. B. midi, reaching mid-calf), Bund, Kragen, Ärmel, Verschlüsse, Taschen, Säume und besondere Details.`;
+/* ===== Haufen =====
+   Erkennt mehrere Kleidungsstücke auf einem Foto – etwa ein Stapel auf dem Bett –
+   mit Kategorie, Namen, Beschreibung und Lage. Kostenloses Textmodell. */
+const KATEGORIEN = ['top', 'knit', 'blouse', 'pants', 'skirt', 'dress', 'outer', 'shoes', 'bag', 'acc'];
+const SCHEMA_HAUFEN = {
+  type: 'OBJECT',
+  properties: {
+    teile: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          kategorie: { type: 'STRING', enum: KATEGORIEN },
+          name: { type: 'STRING' },
+          beschreibung: { type: 'STRING' },
+          box_2d: { type: 'ARRAY', items: { type: 'INTEGER' } },
+          verdeckt: { type: 'BOOLEAN' }
+        },
+        required: ['kategorie', 'name', 'beschreibung', 'box_2d', 'verdeckt']
+      }
+    }
+  },
+  required: ['teile']
+};
+const PROMPT_HAUFEN = `Auf dem Foto liegen oder hängen Kleidungsstücke, Schuhe, Taschen oder Accessoires – oft
+durcheinander, auf einem Haufen oder übereinander. Finde jedes einzelne Teil, höchstens 12.
+Zähle ein Paar Schuhe als ein Teil. Ignoriere Möbel, Bügel, Personen und Hintergrund.
+
+kategorie: top = T-Shirts, Tops, Langarmshirts, Bodys; knit = Pullover, Strickjacken, Sweatshirts;
+blouse = Blusen und Hemden; pants = Hosen, Jeans, Shorts, Leggings; skirt = Röcke; dress = Kleider,
+Jumpsuits; outer = Jacken, Mäntel, Blazer, Westen; shoes = Schuhe; bag = Taschen; acc = Gürtel, Tücher,
+Mützen, Schmuck.
+box_2d: [y0, x0, y1, x1] normiert auf 0–1000, das ganze sichtbare Teil.
+verdeckt: true, wenn mehr als ein Drittel des Teils verdeckt oder gefaltet ist.
+` + BESCHREIBUNG_HINWEIS;
+
+async function haufen(env, body) {
+  const bild = String(body.bild || '');
+  if (!bild || bild.length > 6_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
+  const ergebnis = await gemini(env, [{ text: PROMPT_HAUFEN }, { inline_data: { mime_type: 'image/jpeg', data: bild } }],
+    SCHEMA_HAUFEN, 0.1, env.HAUFEN_MODEL || 'gemini-flash-latest');
+  ergebnis.teile = (ergebnis.teile || []).filter(t => Array.isArray(t.box_2d) && t.box_2d.length === 4).slice(0, 12);
+  return ergebnis;
+}
+
 async function umriss(env, body) {
   const bild = String(body.bild || '');
   if (!bild || bild.length > 4_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
@@ -395,7 +449,8 @@ async function umriss(env, body) {
 Zeichne seinen Umriss so genau wie möglich als Polygon mit 40 bis 80 Punkten im Uhrzeigersinn,
 Koordinaten [y, x] normiert auf 0–1000. Nur das Kleidungsstück selbst: Arme, Beine, Hände, Haut,
 Bügel, Taschen, Schuhe und andere Kleidungsstücke gehören NICHT dazu – wo sie davor liegen, um sie herum.
-box_2d: [y0, x0, y1, x1] normiert auf 0–1000. gefunden=false, wenn das Teil nicht zu sehen ist.`;
+box_2d: [y0, x0, y1, x1] normiert auf 0–1000. gefunden=false, wenn das Teil nicht zu sehen ist.
+${BESCHREIBUNG_HINWEIS}`;
   let letzter;
   const wunsch = UMRISS_MODELLE.includes(body.modell) ? [body.modell] : [];
   for (const m of [...wunsch, ...(env.UMRISS_MODEL ? [env.UMRISS_MODEL] : []), ...UMRISS_MODELLE]) {
@@ -411,7 +466,54 @@ box_2d: [y0, x0, y1, x1] normiert auf 0–1000. gefunden=false, wenn das Teil ni
   throw letzter || new Error('Kein Modell verfügbar');
 }
 
+/* Anbieter für das Nachbilden. FLUX.2 [klein] läuft bei Cloudflare selbst und ist im
+   Tageskontingent von 10.000 Neurons enthalten: rund 110 Neurons je Produktfoto, also
+   etwa 90 Bilder am Tag kostenlos, darüber ~0,1 Cent. Gemini bleibt als Alternative. */
+const FLUX_MODELLE = {
+  schnell: '@cf/black-forest-labs/flux-2-klein-4b',     /* ~110 Neurons */
+  fein:    '@cf/black-forest-labs/flux-2-klein-9b'      /* ~1.550 Neurons */
+};
+const PROMPT_FLUX = (was, beschreibung) => `Professional e-commerce product photo of the ${was} from the reference image${beschreibung ? ` (${beschreibung})` : ''}.
+Show only this one garment, front view, neatly shaped as if worn by an invisible ghost mannequin - the mannequin itself must not be visible (shoes, bags and accessories as a clean packshot),
+centered, fully visible, pure white seamless background, soft even studio lighting, crisp edges, wrinkles smoothed, fresh true-to-life colors.
+Keep the exact color, fabric, texture, pattern, cut, length and all details (buttons, zips, labels, cuffs, seams) of the reference.
+Do not invent details that are not in the reference. No person, no skin, no mannequin, no hanger, no other clothing, no text.`;
+
+function base64ZuBytes(b64) {
+  const bin = atob(b64);
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+
+async function produktfotoFlux(env, body) {
+  const form = new FormData();
+  form.append('prompt', PROMPT_FLUX(String(body.kategorieEn || body.kategorie || 'garment').slice(0, 60),
+    String(body.beschreibung || '').slice(0, 300)));
+  form.append('input_image_0', new Blob([base64ZuBytes(String(body.bild))], { type: 'image/jpeg' }), 'vorlage.jpg');
+  form.append('width', '1024');
+  form.append('height', '1024');
+  const r = new Response(form);
+  const modell = FLUX_MODELLE[body.qualitaet] || FLUX_MODELLE.schnell;
+  const aus = await env.AI.run(modell, { multipart: { body: r.body, contentType: r.headers.get('content-type') } });
+  if (!aus || !aus.image) throw new Error('FLUX lieferte kein Bild');
+  const kopf = aus.image.slice(0, 8);
+  const mime = kopf.startsWith('iVBOR') ? 'image/png' : kopf.startsWith('UklG') ? 'image/webp' : 'image/jpeg';
+  return { bild: aus.image, mime, modell };
+}
+
 async function produktfoto(env, body) {
+  const bild = String(body.bild || '');
+  if (!bild || bild.length > 6_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
+  const anbieter = body.anbieter || env.BILD_ANBIETER || (env.AI ? 'flux' : 'gemini');
+  if (anbieter === 'flux') {
+    if (!env.AI) throw new Error('Workers-AI-Bindung fehlt');
+    return produktfotoFlux(env, body);
+  }
+  return produktfotoGemini(env, body);
+}
+
+async function produktfotoGemini(env, body) {
   const bild = String(body.bild || '');
   if (!bild || bild.length > 6_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
   const rumpf = {
@@ -488,7 +590,8 @@ export default {
         limit,
         modell: env.GEMINI_MODEL || STANDARD_MODELL,
         stylistModell: env.STYLIST_MODEL || STYLIST_MODELL,
-        produktfoto: env.BILDER === 'an',   /* Nachbilden braucht ein Konto mit Abrechnung */
+        produktfoto: !!env.AI || env.BILDER === 'an',
+        bildAnbieter: env.BILD_ANBIETER || (env.AI ? 'flux' : 'gemini'),
         nacht: env.ZAEHLER ? await (async () => {
           const n = (await env.ZAEHLER.get('nacht', 'json')) || {};
           const s = await env.ZAEHLER.get('schrank', 'json');
@@ -600,6 +703,13 @@ export default {
         return json(ergebnis, env);
       }
 
+      if (url.pathname === '/haufen') {
+        const ergebnis = await haufen(env, body);
+        if (ergebnis.fehler) return json(ergebnis, env, 400);
+        await zaehleHoch(env);
+        return json(ergebnis, env);
+      }
+
       if (url.pathname === '/umriss') {
         const ergebnis = await umriss(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
@@ -610,7 +720,8 @@ export default {
       if (url.pathname === '/produktfoto') {
         const ergebnis = await produktfoto(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
-        await zaehleHoch(env);
+        /* FLUX läuft im eigenen Cloudflare-Kontingent, nicht in Googles Tagesgrenze */
+        if (!String(ergebnis.modell || '').startsWith('@cf/')) await zaehleHoch(env);
         return json(ergebnis, env);
       }
 

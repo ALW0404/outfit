@@ -659,6 +659,30 @@ img[data-pic].laedt{opacity:0;}
 .studio-teil .chips.zeile{margin:0 -18px 6px; padding:2px 18px;}
 .spin.mini{width:13px; height:13px; border-width:2px; display:inline-block; vertical-align:-2px;}
 
+/* ---------- Haufen: mehrere Teile auf einem Foto ---------- */
+.hfoto{position:relative; border-radius:var(--r-lg); overflow:hidden; background:var(--surface-2);}
+.hfoto img{width:100%; display:block;}
+.hscan{position:absolute; left:0; right:0; height:30%; top:-30%;
+  background:linear-gradient(to bottom, transparent, rgba(255,255,255,.55), transparent);
+  animation:scannen 1.8s ease-in-out infinite;}
+@keyframes scannen{to{top:100%;}}
+.hgrid{display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px 10px; margin:4px 0 6px;}
+.hteil{position:relative; transition:transform .2s var(--spring), opacity .2s;}
+.hteil[role=button]:active{transform:scale(.95);}
+.hteil.aus{opacity:.38;}
+.hbild{position:relative; aspect-ratio:1; border-radius:var(--r-md); overflow:hidden; background:var(--surface-2);
+  display:flex; align-items:center; justify-content:center;}
+.hbild img{width:100%; height:100%; object-fit:cover;}
+.hbild.fertig{background:var(--studio); padding:10%;}
+.hbild.fertig img{object-fit:contain; filter:drop-shadow(0 6px 8px rgba(23,19,17,.12)); animation:auftauchen .5s var(--ease);}
+.hhaken{position:absolute; top:6px; right:6px; width:24px; height:24px; border-radius:50%; background:var(--ink); color:var(--bg);
+  display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 2px var(--surface);}
+.hhaken .i{width:14px; height:14px; stroke-width:2.6;}
+.hlaeuft{position:absolute; inset:0; background:rgba(255,255,255,.55); display:flex; align-items:center; justify-content:center;}
+.hname{font-size:12.5px; font-weight:600; margin:6px 2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.hkat{font-size:11.5px; color:var(--ink-3); margin:0 2px;}
+.hteil .linkbtn{font-size:12.5px; padding:2px 0;}
+
 /* Sortier-Ansichten */
 .fortschritt{height:4px; border-radius:2px; background:var(--surface-2); overflow:hidden; margin:0 0 16px;}
 .fortschritt i{display:block; height:100%; background:var(--accent); border-radius:2px; transition:width .4s var(--ease);}

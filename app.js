@@ -1882,6 +1882,7 @@ function modalSchluessel() {
   if (UI.studio) return 'studio';
   if (UI.detail) return 'detail:' + UI.detail;
   if (UI.tossOffen && UI.tab === 'today' && !UI.builder && !UI.sorting) return 'toss';
+  if (UI.modal === 'haufen') return 'haufen';
   if (UI.modal) return UI.modal + ':' + ((UI.draft && UI.draft.id) || UI.picker || '');
   return '';
 }
@@ -1974,7 +1975,9 @@ function renderToday() {
       <h2>Willkommen</h2>
       <p class="hint">Fotografiere ein paar Teile aus deinem Schrank – Oberteile, Hosen oder Röcke und
       Schuhe. Danach stellt dir die App hier jeden Tag Outfits zusammen.</p>
-      <button class="btn primary block" onclick="App.setTab('closet'); App.aktion('neu')">${ico('plus')} Erstes Teil hinzufügen</button>
+      <button class="btn primary block" onclick="App.setTab('closet'); App.aktion('neu')">${ico('plus')} Teile hinzufügen</button>
+      <p class="small" style="margin:10px 0 0">Tipp: Leg mehrere Teile nebeneinander aufs Bett und fotografiere sie zusammen –
+      die App erkennt jedes einzeln und macht Produktfotos daraus.</p>
     </div>`
   : (() => {
       const luecke = poolLuecke(UI.season);
@@ -2474,20 +2477,25 @@ const TEIL_NAME = { top: 'Oberteil', knit: 'Pullover', blouse: 'Bluse', pants: '
 
 function studioTeilHTML(s, laedt) {
   if (laedt || !dienstUrl()) return '';
+  if (s.bildLaedt) return `<div class="studio-teil"><p class="small"><span class="spin mini"></span>
+    Bilde ${esc(s.teilName || TEIL_NAME[s.teilKat] || 'das Teil')} als Produktfoto nach …</p></div>`;
   if (s.nachgebildet) return `<div class="studio-teil">
-    <button class="btn small" onclick="App.studioOriginal()">${ico('again')} Zurück zu meinem Foto</button></div>`;
+    <div class="btn-row">
+      <button class="btn small" onclick="App.studioNachbilden()">${ico('dice')} Neu erzeugen</button>
+      <button class="btn small" onclick="App.studioOriginal()">${ico('again')} Mein Foto verwenden</button>
+    </div></div>`;
   const nachbilden = _dienst && _dienst.produktfoto;
   return `<div class="studio-teil">
-    <p class="small">${s.teilLaedt ? `Suche ${TEIL_NAME[s.teilLaedt] === 'Schuhe' ? 'die Schuhe' : 'das Teil'} …`
+    <p class="small">${s.teilLaedt ? `<span class="spin mini"></span> Suche ${TEIL_NAME[s.teilLaedt] === 'Schuhe' ? 'die Schuhe' : 'das Teil'} …`
       : s.umriss ? `Nur ${esc(TEIL_NAME[s.teilKat])} ausgeschnitten.`
+      : nachbilden ? '<b>Was ist das?</b> Tippe an – die App macht daraus ein Produktfoto.'
       : 'Person, Bügel oder anderes mit im Bild? Tippe an, was ausgeschnitten werden soll:'}</p>
     <div class="chips zeile">
       ${Object.keys(TEIL_NAME).map(k => `<button class="chip mini ${s.teilKat === k ? 'active' : ''}"
         onclick="App.studioTeil('${k}')" ${s.teilLaedt ? 'disabled' : ''}>${s.teilLaedt === k ? '<span class="spin mini"></span>' : ''}${TEIL_NAME[k]}</button>`).join('')}
       ${s.umriss ? `<button class="chip mini leise" onclick="App.studioTeil(null)">Ganzes Motiv</button>` : ''}
     </div>
-    ${nachbilden && !s.nachgebildet ? `<button class="btn small" style="margin-top:4px" onclick="App.studioNachbilden()"
-      ${s.teilLaedt || s.bildLaedt ? 'disabled' : ''}>${s.bildLaedt ? '<span class="spin mini"></span> Wird nachgebildet …' : `${ico('sparkle')} Als Produktfoto nachbilden`}</button>` : ''}
+    ${nachbilden && s.umriss ? `<button class="btn small" style="margin-top:4px" onclick="App.studioNachbilden()">${ico('sparkle')} Als Produktfoto nachbilden</button>` : ''}
   </div>`;
 }
 
@@ -2502,6 +2510,56 @@ async function dienstFaehigkeiten() {
   } catch (e) {}
   return _dienst;
 }
+
+/* Englische Bezeichnung für das Bildmodell – FLUX versteht Englisch am besten */
+const KAT_EN = { top: 'top', knit: 'knit sweater', blouse: 'blouse', pants: 'trousers', skirt: 'skirt',
+  dress: 'dress', outer: 'jacket', shoes: 'pair of shoes', bag: 'bag', acc: 'accessory' };
+
+/* Ausschnitt nach box_2d (0–1000) mit etwas Rand. Ein enger Ausschnitt gibt dem
+   Bildmodell mehr Pixel vom Teil – ganz ohne erfand es Details. */
+function ausschnittCanvas(cv, box, rand = 0.05) {
+  if (!box || box.length !== 4) return cv;
+  const [y0, x0, y1, x1] = box.map(v => clamp(v, 0, 1000) / 1000);
+  const w = cv.width, h = cv.height;
+  const r = rand * Math.max((x1 - x0) * w, (y1 - y0) * h);
+  const sx = Math.max(0, x0 * w - r), sy = Math.max(0, y0 * h - r);
+  const sw = Math.min(w, x1 * w + r) - sx, sh = Math.min(h, y1 * h + r) - sy;
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(sw)); out.height = Math.max(1, Math.round(sh));
+  out.getContext('2d').drawImage(cv, sx, sy, sw, sh, 0, 0, out.width, out.height);
+  return out;
+}
+
+/* Umriss → umschließende Box im selben Maß */
+function boxAusUmriss(u) {
+  if (!u || !u.length) return null;
+  const ys = u.map(p => p[0]), xs = u.map(p => p[1]);
+  return [Math.min(...ys), Math.min(...xs), Math.max(...ys), Math.max(...xs)];
+}
+
+/* Ein Teil als Produktfoto nachbilden lassen und gleich vom weißen Grund lösen */
+async function nachbilden(cv, box, kat, beschreibung, qualitaet) {
+  const bild = await studioBild64(ausschnittCanvas(cv, box), 512);
+  const res = await fetch(dienstUrl() + '/produktfoto', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bild, kategorie: TEIL_NAME[kat], kategorieEn: KAT_EN[kat],
+      beschreibung: beschreibung || '', qualitaet: qualitaet || 'schnell' })
+  });
+  const j = await antwortLesen(res);
+  const img = await loadImg(`data:${j.mime || 'image/jpeg'};base64,${j.bild}`);
+  return canvasFrom(img, STUDIO_WORK);
+}
+async function vomWeissLoesen(cv) {
+  let maskCv = null;
+  try { maskCv = await kiMaske(cv); } catch (e) { /* Rückfall: Farbe und Kanten */ }
+  return studioRender(cv, { maskCv, freistellen: !maskCv, tol: 0.3, licht: false, schatten: false, belichtung: 0 });
+}
+const bildFehler = e => {
+  const m = String((e && e.message) || e || '');
+  if (/Workers AI|neuron|daily|4006|capacity/i.test(m)) return 'Für heute sind die kostenlosen Produktfotos aufgebraucht. Morgen geht es weiter.';
+  const t = fehlerText(e);
+  return /Stilanalyse/.test(t) ? 'Das Produktfoto ließ sich gerade nicht erzeugen. Versuch es gleich noch einmal.' : t;
+};
 
 /* Studio-Bild als JPEG für den Dienst – transparente Stellen auf hellem Grund */
 async function studioBild64(cv, max = 1024) {
@@ -2572,11 +2630,16 @@ function renderModal() {
         <button class="zeile-l" onclick="App.neuAus('paste')"><span class="lico hell">${ico('paste')}</span>
           <span class="ltext">Einfügen<small>${pin ? 'Bild aus der Zwischenablage' : 'Freigestelltes Motiv aus der Zwischenablage'}</small></span>${ico('chev', 'chev')}</button>
       </div>
+      ${pin || !dienstUrl() ? '' : `<div class="liste" style="margin-top:10px">
+        <button class="zeile-l" onclick="App.neuAus('haufen')"><span class="lico akzent">${ico('layers')}</span>
+          <span class="ltext">Mehrere Teile auf einem Foto<small>Ein Stapel auf dem Bett – jedes Teil wird erkannt und zum Produktfoto</small></span>${ico('chev', 'chev')}</button>
+      </div>`}
       <p class="small" style="margin:12px 4px 0">${pin
         ? 'In Pinterest den Pin öffnen → Teilen → <b>Bild sichern</b>, dann hier aus Fotos wählen.'
         : 'Am schönsten: in der Fotos-App das Teil lange antippen → <b>Motiv kopieren</b> → hier einfügen.'}</p>
     </div></div>`;
   }
+  if (UI.modal === 'haufen') return renderHaufen();
   if (UI.modal === 'pick') return renderPicker();
   if (UI.modal === 'itempick') return renderItemPicker();
   if (UI.modal !== 'item' || !UI.draft) return '';
@@ -2812,6 +2875,7 @@ App.neuAus = quelle => {
   UI.modal = null;
   renderOverlay();
   if (pin) { quelle === 'paste' ? App.pasteTrend() : App.addTrend(); return; }
+  if (quelle === 'haufen') { App.haufenFoto('library'); return; }
   quelle === 'paste' ? App.pasteItem() : App.addItem(quelle);
 };
 App.suche = v => {
@@ -3071,7 +3135,15 @@ App.studioTeil = async kat => {
     if (UI.studio !== s) return;
     if (!j.gefunden || !Array.isArray(j.umriss) || j.umriss.length < 3) {
       toast(`Kein ${TEIL_NAME[kat] === 'Schuhe' ? 'Paar Schuhe' : TEIL_NAME[kat]} im Bild gefunden.`);
-    } else { s.umriss = j.umriss; s.teilKat = kat; s.zeigeVorher = false; }
+    } else {
+      s.umriss = j.umriss; s.teilKat = kat; s.zeigeVorher = false;
+      s.teilName = String(j.name || '').slice(0, 60);
+      s.beschreibung = String(j.beschreibung || '').slice(0, 300);
+      s.box = Array.isArray(j.box_2d) && j.box_2d.length === 4 ? j.box_2d : boxAusUmriss(j.umriss);
+      /* Jedes Foto soll wie ein Produktbild aussehen – also gleich nachbilden,
+         wenn der Dienst das kann. „Zurück zu meinem Foto" macht es rückgängig. */
+      if (_dienst && _dienst.produktfoto) { s.teilLaedt = null; App.studioNachbilden(); return; }
+    }
   } catch (e) {
     const t = fehlerText(e);
     toast(/Stilanalyse/.test(t) ? 'Das Teil konnte gerade nicht erkannt werden. Versuch es gleich noch einmal.' : t);
@@ -3088,24 +3160,17 @@ App.studioNachbilden = async () => {
   if (!s.teilKat) { toast('Tippe zuerst an, welches Teil es ist.'); return; }
   s.bildLaedt = true; render();
   try {
-    const bild = await studioBild64(s.original || s.gross, 1280);
-    const res = await fetch(dienstUrl() + '/produktfoto', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bild, kategorie: TEIL_NAME[s.teilKat] })
-    });
-    const j = await antwortLesen(res);
+    const neu = await nachbilden(s.original || s.gross, s.box, s.teilKat, s.beschreibung);
     if (UI.studio !== s) return;
-    const img = await loadImg(`data:${j.mime || 'image/png'};base64,${j.bild}`);
-    s.original = s.original || s.gross;
-    s.vorher = s.klein;
-    s.gross = canvasFrom(img, STUDIO_WORK);
-    s.klein = canvasFrom(img, STUDIO_PREVIEW);
-    s.umriss = null; s.hatAlpha = false; s.maskCv = null; s.nachgebildet = true;
+    if (!s.original) { s.original = s.gross; s.vorher = s.klein; }
+    s.gross = neu;
+    s.klein = canvasFrom(neu, STUDIO_PREVIEW);
+    s.umrissMerk = s.umriss || s.umrissMerk; s.umriss = null; s.hatAlpha = false; s.maskCv = null; s.nachgebildet = true;
     s.licht = false; s.status = 'laden'; render();
     try { s.maskCv = await kiMaske(s.gross); s.status = 'ki'; }
     catch (e) { s.status = 'einfach'; s.tol = 0.3; }
   } catch (e) {
-    toast(fehlerText(e));
+    toast(bildFehler(e));
   } finally {
     if (UI.studio === s) { s.bildLaedt = false; render(); }
   }
@@ -3115,11 +3180,169 @@ App.studioOriginal = async () => {
   const s = UI.studio;
   if (!s || !s.original) return;
   s.gross = s.original; s.klein = s.vorher; s.original = null;
-  s.nachgebildet = false; s.maskCv = null; s.licht = true; s.status = 'laden'; render();
+  s.nachgebildet = false; s.maskCv = null; s.licht = true; s.umriss = s.umrissMerk || null; s.status = 'laden'; render();
   try { s.maskCv = await kiMaske(s.gross); s.status = 'ki'; }
   catch (e) { s.status = 'einfach'; s.tol = 0.3; }
   if (UI.studio === s) render();
 };
+
+/* ===== Haufen: viele Teile auf einem Foto =====
+   Foto → Erkennung (Kategorie, Name, Beschreibung, Lage) → Auswahl → jedes Teil
+   als Produktfoto nachbilden → prüfen → in den Schrank. */
+const daumen = (cv, max = 240) => {
+  const k = Math.min(1, max / Math.max(cv.width, cv.height));
+  const t = document.createElement('canvas');
+  t.width = Math.max(1, Math.round(cv.width * k)); t.height = Math.max(1, Math.round(cv.height * k));
+  t.getContext('2d').drawImage(cv, 0, 0, t.width, t.height);
+  return t.toDataURL('image/png');
+};
+
+async function openHaufen(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImg(url);
+    const bild = canvasFrom(img, 2000);
+    UI.haufen = { bild, foto: daumen(bild, 700), status: 'erkennen', teile: [] };
+    UI.modal = 'haufen'; render();
+    const res = await fetch(dienstUrl() + '/haufen', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bild: await studioBild64(bild, 1280) })
+    });
+    const j = await antwortLesen(res);
+    const h = UI.haufen;
+    if (!h) return;
+    h.teile = (j.teile || []).filter(t => CATS[t.kategorie]).map(t => ({
+      kat: t.kategorie, name: String(t.name || '').slice(0, 60), beschreibung: String(t.beschreibung || '').slice(0, 300),
+      box: t.box_2d, verdeckt: !!t.verdeckt, an: true, zustand: 'offen',
+      vorschau: daumen(ausschnittCanvas(bild, t.box_2d, 0.03), 220)
+    }));
+    h.status = h.teile.length ? 'auswahl' : 'leer';
+    render();
+  } catch (e) {
+    console.warn(e);
+    if (UI.haufen) { UI.haufen.status = 'fehler'; UI.haufen.meldung = bildFehler(e); render(); }
+  } finally { setTimeout(() => URL.revokeObjectURL(url), 0); }
+}
+
+App.haufenFoto = quelle => {
+  UI.dateiZiel = 'haufen';
+  App.addItem(quelle);
+};
+App.haufenTeil = i => { const t = UI.haufen && UI.haufen.teile[i]; if (t) { t.an = !t.an; render(); } };
+App.haufenZu = () => {
+  if (UI.haufen && UI.haufen.status === 'bilden' && !confirm('Abbrechen? Bereits erzeugte Bilder gehen verloren.')) return;
+  UI.haufen = null; UI.modal = null; render();
+};
+
+async function haufenBildeEins(h, t) {
+  t.zustand = 'laeuft'; render();
+  try {
+    const neu = await nachbilden(h.bild, t.box, t.kat, t.beschreibung);
+    const frei = await vomWeissLoesen(neu);
+    t.ergebnis = frei; t.ergebnisVorschau = daumen(frei, 300);
+    t.zustand = 'fertig'; t.behalten = true;
+  } catch (e) {
+    console.warn(e);
+    t.zustand = 'fehler'; t.meldung = bildFehler(e);
+  }
+  if (UI.haufen === h) render();
+}
+
+App.haufenBilden = async () => {
+  const h = UI.haufen;
+  if (!h) return;
+  h.status = 'bilden'; render();
+  /* Nacheinander statt gleichzeitig: schont das Kontingent und zeigt Fortschritt */
+  for (const t of h.teile.filter(x => x.an && x.zustand !== 'fertig')) {
+    if (UI.haufen !== h) return;
+    await haufenBildeEins(h, t);
+    if (t.zustand === 'fehler' && /aufgebraucht/.test(t.meldung || '')) break;
+  }
+  if (UI.haufen === h) { h.status = 'pruefen'; render(); }
+};
+App.haufenNochmal = async i => {
+  const h = UI.haufen; const t = h && h.teile[i];
+  if (!t || t.zustand === 'laeuft') return;
+  await haufenBildeEins(h, t);
+};
+App.haufenBehalten = i => { const t = UI.haufen && UI.haufen.teile[i]; if (t) { t.behalten = !t.behalten; render(); } };
+
+App.haufenUebernehmen = async () => {
+  const h = UI.haufen;
+  if (!h) return;
+  const liste = h.teile.filter(t => t.zustand === 'fertig' && t.behalten);
+  if (!liste.length) return;
+  h.status = 'speichern'; render();
+  let n = 0;
+  for (const t of liste) {
+    try {
+      const blob = await encode(t.ergebnis, true);
+      const { blob: out, colors, cut, ar } = await prepItemImage(blob, 900, true);
+      const picId = uid();
+      await picPut(picId, out);
+      const w = CATS[t.kat].warmth;
+      DB.items.push({ id: uid(), picId, colors, cut, ar, cat: t.kat, name: t.name,
+        warmth: w, formality: 3, seasons: seasonsFromWarmth(w), seasonsAuto: true,
+        addedAt: Date.now(), nachgebildet: true });
+      n++;
+    } catch (e) { console.warn('Teil nicht gespeichert', e); }
+  }
+  save();
+  UI.haufen = null; UI.modal = null; UI.queue = null;
+  UI.tab = 'closet'; UI.closetFilter = 'all';
+  render();
+  toast(`${n} ${n === 1 ? 'Teil' : 'Teile'} im Schrank – Jahreszeiten kurz bestätigen`);
+};
+
+function renderHaufen() {
+  const h = UI.haufen;
+  if (!h) return '';
+  const an = h.teile.filter(t => t.an).length;
+  const fertig = h.teile.filter(t => t.zustand === 'fertig').length;
+  const behalten = h.teile.filter(t => t.zustand === 'fertig' && t.behalten).length;
+  const titel = { erkennen: 'Teile erkennen', auswahl: `${h.teile.length} Teile gefunden`, bilden: 'Produktfotos entstehen',
+    pruefen: 'Prüfen', speichern: 'Speichern', leer: 'Nichts gefunden', fehler: 'Hat nicht geklappt' }[h.status];
+  const karte = (t, i) => {
+    const bild = t.ergebnisVorschau || t.vorschau;
+    const zeigt = h.status === 'auswahl' ? (t.an ? 'an' : 'aus')
+      : t.zustand === 'fertig' ? (t.behalten ? 'an' : 'aus') : t.zustand;
+    const klick = h.status === 'auswahl' ? `App.haufenTeil(${i})`
+      : t.zustand === 'fertig' ? `App.haufenBehalten(${i})` : '';
+    return `<div class="hteil ${zeigt}" ${klick ? `role="button" onclick="${klick}"` : ''}>
+      <div class="hbild${t.ergebnisVorschau ? ' fertig' : ''}"><img src="${bild}" alt="">
+        ${t.zustand === 'laeuft' ? '<span class="hlaeuft"><span class="spin"></span></span>' : ''}
+        ${zeigt === 'an' ? `<span class="hhaken">${ico('check')}</span>` : ''}</div>
+      <div class="hname">${esc(t.name || TEIL_NAME[t.kat])}</div>
+      <div class="hkat">${esc(CATS[t.kat].label)}${t.verdeckt && !t.ergebnisVorschau ? ' · teils verdeckt' : ''}</div>
+      ${t.zustand === 'fehler' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('again')} Nochmal</button>` : ''}
+      ${t.zustand === 'fertig' && h.status === 'pruefen' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('dice')} Neu erzeugen</button>` : ''}
+    </div>`;
+  };
+  return `<div class="overlay" onclick="App.haufenZu()"><div class="sheet" onclick="event.stopPropagation()">
+    ${blattKopf(titel, 'App.haufenZu()')}
+    ${h.status === 'erkennen' ? `<div class="hfoto"><img src="${h.foto}" alt=""><div class="hscan"></div></div>
+      <p class="hint center" style="margin-top:12px"><span class="spin mini"></span> Ich suche die einzelnen Teile …</p>` : ''}
+    ${h.status === 'leer' ? `<p class="hint">Auf dem Foto habe ich keine Kleidung gefunden. Am besten klappt es mit Abstand,
+      gutem Licht und Teilen, die nicht ganz übereinanderliegen.</p>` : ''}
+    ${h.status === 'fehler' ? `<p class="hint">${esc(h.meldung || 'Die Erkennung hat nicht geklappt.')}</p>` : ''}
+    ${h.status === 'auswahl' ? `<p class="hint" style="margin-top:-6px">Tippe an, welche Teile in den Schrank sollen. Jedes wird
+      als Produktfoto nachgebildet${h.teile.some(t => t.verdeckt) ? ' – bei verdeckten Teilen ergänzt die KI, was sie nicht sieht' : ''}.</p>` : ''}
+    ${h.status === 'bilden' ? `<p class="hint" style="margin-top:-6px">${fertig} von ${an} fertig – etwa 10 Sekunden je Teil.</p>
+      <div class="fortschritt"><i style="width:${Math.round(fertig * 100 / Math.max(1, an))}%"></i></div>` : ''}
+    ${h.status === 'pruefen' ? `<p class="hint" style="margin-top:-6px">Tippe Bilder an, die du nicht willst. Nicht getroffen?
+      <i>Neu erzeugen</i> versucht es noch einmal.</p>` : ''}
+    ${h.teile.length && h.status !== 'erkennen' ? `<div class="hgrid">${h.teile.map((t, i) =>
+      h.status === 'auswahl' || t.an ? karte(t, i) : '').join('')}</div>` : ''}
+    <div class="sheet-fuss">
+      ${h.status === 'auswahl' ? `<button class="btn primary block" onclick="App.haufenBilden()" ${an ? '' : 'disabled'}>${ico('sparkle')}
+        ${an} ${an === 1 ? 'Teil' : 'Teile'} als Produktfoto anlegen</button>` : ''}
+      ${h.status === 'pruefen' ? `<button class="btn primary block" onclick="App.haufenUebernehmen()" ${behalten ? '' : 'disabled'}>
+        ${behalten} ${behalten === 1 ? 'Teil' : 'Teile'} in den Schrank</button>` : ''}
+      ${h.status === 'speichern' ? `<button class="btn primary block" disabled><span class="spin mini"></span> Wird gespeichert …</button>` : ''}
+      ${['leer', 'fehler'].includes(h.status) ? `<button class="btn block" onclick="App.haufenZu()">Schließen</button>` : ''}
+    </div>
+  </div></div>`;
+}
 
 App.studioToggleSchatten = () => { UI.studio.schatten = !UI.studio.schatten; UI.studio.zeigeVorher = false; render(); };
 App.studioToggleLicht = () => { UI.studio.licht = !UI.studio.licht; UI.studio.zeigeVorher = false; render(); };
@@ -3150,6 +3373,7 @@ App.studioCommit = async () => {
     document.querySelector('.toast')?.remove();
     await startDraftFrom(blob, { fertig: true });
     if (UI.draft && s.teilKat) App.draftSet('cat', s.teilKat, true);
+    if (UI.draft && s.teilName && !UI.draft.name) UI.draft.name = s.teilName;
     if (UI.draft && s.nachgebildet) UI.draft.nachgebildet = true;
     render();
   } catch (e) {
@@ -3168,9 +3392,11 @@ App.addItem = source => {
 };
 App.itemFileChosen = async input => {
   const file = input.files && input.files[0];
+  const ziel = UI.dateiZiel; UI.dateiZiel = null;
   if (!file) return;
   input.value = '';
-  await openStudio(file);
+  if (ziel === 'haufen') await openHaufen(file);
+  else await openStudio(file);
 };
 App.pasteItem = () => pasteImage(openStudio);
 async function pasteImage(handler) {
