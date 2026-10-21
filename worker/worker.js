@@ -196,25 +196,33 @@ async function zaehleHoch(env, um = 1) {
 /* Google stellt gerade von AIza- auf AQ-Schlüssel um. Für AQ wird teils der
    Header x-goog-api-key verlangt, für AIza funktioniert der Parameter. Deshalb
    beide Wege probieren und den aussagekräftigeren Fehler zurückgeben. */
-async function geminiRuf(env, pfad, rumpf) {
+async function geminiRuf(env, pfad, rumpf, schluessel = env.GEMINI_KEY) {
   const basis = `https://generativelanguage.googleapis.com/v1beta/${pfad}`;
   const koerper = rumpf ? JSON.stringify(rumpf) : undefined;
   const wege = [
-    { name: 'Header',   url: basis, kopf: { 'x-goog-api-key': env.GEMINI_KEY } },
-    { name: 'Parameter', url: basis + (basis.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(env.GEMINI_KEY), kopf: {} }
+    { name: 'Header',   url: basis, kopf: { 'x-goog-api-key': schluessel } },
+    { name: 'Parameter', url: basis + (basis.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(schluessel), kopf: {} }
   ];
   const fehler = [];
   for (const w of wege) {
-    const res = await fetch(w.url, {
-      method: rumpf ? 'POST' : 'GET',
-      headers: { 'Content-Type': 'application/json', ...w.kopf },
-      body: koerper
-    });
+    /* Bei „hoher Auslastung" (503) kurz warten und es noch zweimal versuchen –
+       das sind Lastspitzen bei Google, keine Fehler in der Anfrage */
+    let res;
+    for (let versuch = 0; versuch < 3; versuch++) {
+      res = await fetch(w.url, {
+        method: rumpf ? 'POST' : 'GET',
+        headers: { 'Content-Type': 'application/json', ...w.kopf },
+        body: koerper
+      });
+      if (res.status !== 503) break;
+      await new Promise(r => setTimeout(r, 4000 * (versuch + 1)));
+    }
     if (res.ok) return { daten: await res.json(), weg: w.name };
     const roh = await res.text();
     let grund = roh.slice(0, 300);
     try { grund = JSON.parse(roh)?.error?.message || grund; } catch {}
     fehler.push(`${w.name}: ${res.status} ${grund}`);
+    if (![400, 401, 403].includes(res.status)) break;
   }
   throw new Error(fehler.join(' | '));
 }
@@ -227,8 +235,10 @@ async function gemini(env, teile, schema, temperatur = 0.2, modellWunsch) {
       response_mime_type: 'application/json',
       response_schema: schema,
       temperature: temperatur,
-      /* Ohne das wird die Liste bei vielen Teilen stillschweigend abgeschnitten */
-      maxOutputTokens: 8192
+      /* Ohne das wird die Liste bei vielen Teilen abgeschnitten. Neuere Modelle
+         „denken" vorher, und das Denken zählt mit – bei 8192 brachen drei von vier
+         Nachtläufen mitten im JSON ab. */
+      maxOutputTokens: 32768
     }
   };
   const modell = modellWunsch || env.GEMINI_MODEL || STANDARD_MODELL;
@@ -246,11 +256,14 @@ async function gemini(env, teile, schema, temperatur = 0.2, modellWunsch) {
       const text = String(e.message);
       const nachfolger = /use\s+models\/([a-z0-9.\-]+)/i.exec(text);
       if (nachfolger && !versuche.includes(nachfolger[1])) versuche.push(nachfolger[1]);
-      if (/\b(429|404)\b/.test(text) && !versuche.includes(RUECKFALL_MODELL)) versuche.push(RUECKFALL_MODELL);
+      if (/\b(429|404|500|503)\b/.test(text) && !versuche.includes(RUECKFALL_MODELL)) versuche.push(RUECKFALL_MODELL);
     }
   }
   if (!daten) throw letzterFehler;
-  const text = daten?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const kandidat = daten?.candidates?.[0];
+  /* Alle Textteile außer Gedanken zusammensetzen – der erste Teil ist nicht immer die Antwort */
+  const text = (kandidat?.content?.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join('');
+  if (kandidat?.finishReason === 'MAX_TOKENS') throw new Error('Antwort abgeschnitten (MAX_TOKENS)');
   if (!text) throw new Error('Gemini lieferte keine verwertbare Antwort');
   const ergebnis = JSON.parse(text);
   if (benutzt !== modell) ergebnis._modell = benutzt;   /* transparent machen */
@@ -305,14 +318,23 @@ async function stylistErzeugen(env, body) {
    ab; morgens holt die App die fertigen Outfits ohne Wartezeit. Fotos liegen
    hier nie, nur Namen und Merkmale. */
 const NACHT_PAUSE_MS = 8000;      /* nicht zu schnell hintereinander, sonst greift Googles Minutengrenze */
-const tagUTC = () => new Date().toISOString().slice(0, 10);
+const NACHT_STUNDE = 4;           /* Ortszeit der Nutzerin */
 
-async function nachtlauf(env) {
+/* Der Zeitplan läuft stündlich; gearbeitet wird nur, wenn es bei der Nutzerin
+   gerade 4 Uhr ist. Feste UTC-Zeiten passen nicht, sobald sie verreist –
+   2 Uhr UTC ist in Japan Mittag. Die Zeitzone schickt die App mit. */
+async function nachtlauf(env, erzwingen) {
   if (!env.ZAEHLER || !env.GEMINI_KEY) return;
   const schrank = await env.ZAEHLER.get('schrank', 'json');
   if (!schrank || !Array.isArray(schrank.auftraege)) return;
-  const limit = parseInt(env.TAGESLIMIT || '10', 10);
+  const tz = Number.isFinite(schrank.tz) ? schrank.tz : 120;
+  const ort = new Date(Date.now() + tz * 60000);
+  const ortTag = ort.toISOString().slice(0, 10);
   const ergebnis = (await env.ZAEHLER.get('nacht', 'json')) || {};
+  if (!erzwingen && (ort.getUTCHours() !== NACHT_STUNDE || ergebnis._lauf === ortTag)) return;
+  ergebnis._lauf = ortTag;
+  await env.ZAEHLER.put('nacht', JSON.stringify(ergebnis));
+  const limit = parseInt(env.TAGESLIMIT || '10', 10);
   for (const a of schrank.auftraege.slice(0, 6)) {
     if (await verbrauch(env) >= limit) break;
     try {
@@ -322,13 +344,100 @@ async function nachtlauf(env) {
         ids: (o.teile || []).map(c => karte[String(c).trim().toUpperCase()]),
         grund: String(o.grund || '').slice(0, 180)
       })).filter(o => o.ids.length && o.ids.every(Boolean));
-      ergebnis[a.schluessel] = { datum: tagUTC(), outfits };
+      ergebnis[a.schluessel] = { datum: ortTag, outfits };
     } catch (e) {
       ergebnis[a.schluessel] = { ...(ergebnis[a.schluessel] || {}), fehler: String(e.message || e).slice(0, 200) };
     }
     await env.ZAEHLER.put('nacht', JSON.stringify(ergebnis));
     await new Promise(r => setTimeout(r, NACHT_PAUSE_MS));
   }
+}
+
+/* ===== Produktfoto =====
+   Bildet ein Kleidungsstück aus einem Alltagsfoto (am Körper, auf dem Bügel,
+   zerknittert) als sauberes Produktfoto auf Weiß nach – so, wie Shops es zeigen.
+   Das ist eine Nachbildung, kein Ausschnitt: Die App bietet es nur auf Wunsch an. */
+const BILD_MODELLE = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image'];
+const PROMPT_PRODUKT = (kategorie, name) => `Erzeuge aus diesem Foto ein professionelles Produktfoto für einen Online-Shop.
+
+Zu zeigen ist ausschließlich: ${kategorie}${name ? ` („${name}")` : ''}.
+Alles andere weglassen: Person, Haut, Haare, Bügel, Tür, Möbel, Taschen, Schuhe oder andere Kleidungsstücke,
+sofern sie nicht selbst gemeint sind.
+
+Darstellung: Vorderansicht, glatt und ordentlich wie frisch gebügelt, natürliche Form wie auf einer
+unsichtbaren Schneiderpuppe (Ghost Mannequin) beziehungsweise als sauberes Flat-Lay bei Schuhen,
+Taschen und Accessoires. Mittig, vollständig im Bild, reinweißer Hintergrund (#FFFFFF), weiches
+natürliches Licht, ganz leichter Schatten.
+
+Treue ist wichtiger als Schönheit: exakt dieselbe Farbe, dasselbe Material, dieselbe Struktur,
+dieselben Muster und Details (Knöpfe, Reißverschlüsse, Etiketten, Bündchen, Nähte, Länge und
+Schnitt). Nichts hinzufügen, nichts weglassen, nichts umgestalten.`;
+
+/* ===== Umriss =====
+   Kein Nachbilden: Gemini sagt nur, WO das gemeinte Teil im Foto liegt – als Umriss
+   aus Punkten. Ausgeschnitten wird in der App aus den Originalpixeln, die feinen
+   Kanten liefert das Freistell-Modell. Pixelmasken von Gemini dauerten über 100 s. */
+const UMRISS_MODELLE = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
+const SCHEMA_UMRISS = {
+  type: 'OBJECT',
+  properties: {
+    gefunden: { type: 'BOOLEAN' },
+    box_2d: { type: 'ARRAY', items: { type: 'INTEGER' } },
+    umriss: { type: 'ARRAY', items: { type: 'ARRAY', items: { type: 'INTEGER' } } }
+  },
+  required: ['gefunden', 'box_2d', 'umriss']
+};
+async function umriss(env, body) {
+  const bild = String(body.bild || '');
+  if (!bild || bild.length > 4_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
+  const was = String(body.kategorie || 'das Kleidungsstück').slice(0, 60);
+  const text = `Finde im Foto genau dieses Kleidungsstück: ${was}${body.name ? ` („${String(body.name).slice(0, 80)}")` : ''}.
+Zeichne seinen Umriss so genau wie möglich als Polygon mit 40 bis 80 Punkten im Uhrzeigersinn,
+Koordinaten [y, x] normiert auf 0–1000. Nur das Kleidungsstück selbst: Arme, Beine, Hände, Haut,
+Bügel, Taschen, Schuhe und andere Kleidungsstücke gehören NICHT dazu – wo sie davor liegen, um sie herum.
+box_2d: [y0, x0, y1, x1] normiert auf 0–1000. gefunden=false, wenn das Teil nicht zu sehen ist.`;
+  let letzter;
+  const wunsch = UMRISS_MODELLE.includes(body.modell) ? [body.modell] : [];
+  for (const m of [...wunsch, ...(env.UMRISS_MODEL ? [env.UMRISS_MODEL] : []), ...UMRISS_MODELLE]) {
+    try {
+      const ergebnis = await gemini(env, [{ text }, { inline_data: { mime_type: 'image/jpeg', data: bild } }],
+        SCHEMA_UMRISS, 0.1, m);
+      return { ...ergebnis, modell: m };
+    } catch (e) {
+      letzter = e;
+      if (!/\b(404|429|500|503)\b/.test(String(e.message))) break;
+    }
+  }
+  throw letzter || new Error('Kein Modell verfügbar');
+}
+
+async function produktfoto(env, body) {
+  const bild = String(body.bild || '');
+  if (!bild || bild.length > 6_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
+  const rumpf = {
+    contents: [{ parts: [
+      { text: PROMPT_PRODUKT(String(body.kategorie || 'das Kleidungsstück').slice(0, 60), String(body.name || '').slice(0, 80)) },
+      { inline_data: { mime_type: 'image/jpeg', data: bild } }
+    ] }],
+    generationConfig: { response_modalities: ['IMAGE'] }
+  };
+  const modelle = env.BILD_MODEL ? [env.BILD_MODEL, ...BILD_MODELLE] : BILD_MODELLE;
+  let letzter;
+  for (const m of modelle) {
+    try {
+      /* Eigener Schlüssel aus einem Projekt mit Abrechnung – so bleiben Text-Abfragen kostenlos */
+      const { daten } = await geminiRuf(env, `models/${m}:generateContent`, rumpf, env.BILD_KEY || env.GEMINI_KEY);
+      const teile = daten?.candidates?.[0]?.content?.parts || [];
+      const b = teile.find(p => p.inline_data || p.inlineData);
+      if (!b) { letzter = new Error('Kein Bild in der Antwort (' + (daten?.candidates?.[0]?.finishReason || 'unbekannt') + ')'); continue; }
+      const d = b.inline_data || b.inlineData;
+      return { bild: d.data, mime: d.mime_type || d.mimeType || 'image/png', modell: m };
+    } catch (e) {
+      letzter = e;
+      if (!/\b(404|429|500|503)\b/.test(String(e.message))) break;
+    }
+  }
+  throw letzter || new Error('Kein Bildmodell verfügbar');
 }
 
 export default {
@@ -379,11 +488,13 @@ export default {
         limit,
         modell: env.GEMINI_MODEL || STANDARD_MODELL,
         stylistModell: env.STYLIST_MODEL || STYLIST_MODELL,
+        produktfoto: env.BILDER === 'an',   /* Nachbilden braucht ein Konto mit Abrechnung */
         nacht: env.ZAEHLER ? await (async () => {
           const n = (await env.ZAEHLER.get('nacht', 'json')) || {};
           const s = await env.ZAEHLER.get('schrank', 'json');
-          return { abgelegt: s ? s.abgelegt : null, auftraege: s ? s.auftraege.length : 0,
-            ergebnisse: Object.fromEntries(Object.entries(n).map(([k, v]) =>
+          return { abgelegt: s ? s.abgelegt : null, tz: s ? s.tz : null, auftraege: s ? s.auftraege.length : 0,
+            letzterLauf: n._lauf || null,
+            ergebnisse: Object.fromEntries(Object.entries(n).filter(([k]) => !k.startsWith('_')).map(([k, v]) =>
               [k, v.fehler ? 'Fehler' : `${(v.outfits || []).length} Outfits vom ${v.datum}`])) };
         })() : null,
         schluessel,
@@ -444,7 +555,8 @@ export default {
       let s;
       try { s = JSON.parse(roh); } catch { return json({ fehler: 'Ungültiger Rumpf' }, env, 400); }
       if (!Array.isArray(s.auftraege)) return json({ fehler: 'Feld "auftraege" fehlt' }, env, 400);
-      await env.ZAEHLER.put('schrank', JSON.stringify({ abgelegt: new Date().toISOString(), auftraege: s.auftraege.slice(0, 6) }));
+      const tz = Number.isFinite(s.tz) ? Math.max(-720, Math.min(840, s.tz)) : null;
+      await env.ZAEHLER.put('schrank', JSON.stringify({ abgelegt: new Date().toISOString(), tz, auftraege: s.auftraege.slice(0, 6) }));
       return json({ ok: true }, env);
     }
 
@@ -485,6 +597,20 @@ export default {
       if (url.pathname === '/stylist') {
         const ergebnis = await stylistErzeugen(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
+        return json(ergebnis, env);
+      }
+
+      if (url.pathname === '/umriss') {
+        const ergebnis = await umriss(env, body);
+        if (ergebnis.fehler) return json(ergebnis, env, 400);
+        await zaehleHoch(env);
+        return json(ergebnis, env);
+      }
+
+      if (url.pathname === '/produktfoto') {
+        const ergebnis = await produktfoto(env, body);
+        if (ergebnis.fehler) return json(ergebnis, env, 400);
+        await zaehleHoch(env);
         return json(ergebnis, env);
       }
 

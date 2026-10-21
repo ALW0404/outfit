@@ -190,6 +190,23 @@ leer sein.
 
 ---
 
+# Teil 5 · Nachbilden freischalten (optional, kostet Geld)
+
+„Als Produktfoto nachbilden" nutzt ein Bildmodell von Gemini. Das ist im kostenlosen Tarif
+gesperrt (Kontingent 0) und braucht ein Projekt mit Abrechnung. Grob **4–7 Cent je Bild**;
+alle 172 Teile einmal nachbilden läge bei etwa 7–12 Euro, danach nur noch neue Teile.
+
+Damit die Text-Abfragen (Analyse, Stylistin, Umriss) kostenlos bleiben, bekommt das Nachbilden
+einen **eigenen Schlüssel aus einem eigenen Projekt**:
+
+1. <https://aistudio.google.com/api-keys> → **Create API key** → **Create project**,
+   Name `outfit-bilder`.
+2. Bei diesem Projekt **Set up billing** und die Zahlungsdaten hinterlegen. Am besten in der
+   Google-Cloud-Konsole unter *Abrechnung → Budgets* ein Budget mit Warnung setzen, etwa 10 €.
+3. Den Schlüssel im Cloudflare-Worker unter **Settings → Variables and Secrets** als
+   **Secret** `BILD_KEY` anlegen. Nicht in die App, nicht in den Chat.
+4. Kurz Bescheid geben – dann wird `BILDER = an` gesetzt, und der Knopf erscheint im Studio.
+
 # Wie viel ist kostenlos?
 
 Google veröffentlicht **keine allgemeingültige Tabelle mehr**. Deine eigenen Werte stehen unter

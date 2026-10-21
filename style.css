@@ -654,6 +654,11 @@ img[data-pic].laedt{opacity:0;}
   color:var(--ink-2); white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto;
 }
 
+.studio-teil{margin:12px 0 2px;}
+.studio-teil > .small{margin:0 0 8px;}
+.studio-teil .chips.zeile{margin:0 -18px 6px; padding:2px 18px;}
+.spin.mini{width:13px; height:13px; border-width:2px; display:inline-block; vertical-align:-2px;}
+
 /* Sortier-Ansichten */
 .fortschritt{height:4px; border-radius:2px; background:var(--surface-2); overflow:hidden; margin:0 0 16px;}
 .fortschritt i{display:block; height:100%; background:var(--accent); border-radius:2px; transition:width .4s var(--ease);}

@@ -207,6 +207,19 @@ Original-Produktfoto kippte warmes Kunstlicht dadurch ins Blaue. Ohne ihn bleibt
 Bereits freigestellte Bilder (über „Motiv kopieren") erkennt das Studio und überspringt den
 Freisteller.
 
+**Nur ein Teil ausschneiden.** Fotografierst du am Körper oder auf dem Bügel, stellt das Modell
+alles frei, was im Vordergrund steht – Rock samt T-Shirt, Tasche und Schuhen, Jacke samt Bügel.
+Darunter tippst du an, was es ist (*Rock*, *Jacke* …). Der KI-Dienst zeichnet dann den Umriss
+genau dieses Teils, und die App schneidet nur das aus. Die Pixel bleiben weiterhin deine eigenen,
+die feinen Kanten kommen vom Modell auf dem Gerät. Das Teil wird auch gleich in die richtige
+Kategorie einsortiert. Kostet eine Abfrage aus dem kostenlosen Kontingent und dauert je nach
+Auslastung bei Google wenige Sekunden bis etwa eine Minute.
+
+**Als Produktfoto nachbilden** (nur wenn freigeschaltet, siehe `EINRICHTUNG.md`, Teil 5): Die KI
+erzeugt aus dem Alltagsfoto ein sauberes Shop-Foto – glatt, ohne Falten, Person und Bügel. Das ist
+eine **Nachbildung**, nicht mehr dein Foto; im Teil steht deshalb „Von der KI als Produktfoto
+nachgebildet". *Zurück zu meinem Foto* macht es rückgängig.
+
 ## Teile erfassen – der schnelle Weg
 
 1. Kleidungsstück flach hinlegen und fotografieren.

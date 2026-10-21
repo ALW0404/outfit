@@ -828,6 +828,28 @@ function studioTone(d, w, h, alpha, belichtung) {
 }
 
 /* Ein Durchlauf: Maske, Farbe, Zuschnitt, Rand. */
+function umrissAlpha(umriss, w, h) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  /* Kaum ausweiten: wo der Umriss an Haut oder anderes Textil grenzt, soll nichts
+     davon mitkommen. Außenkanten zum Hintergrund schneidet ohnehin das Modell. */
+  const rand = Math.max(2, Math.round(Math.max(w, h) * 0.004));
+  if ('filter' in c) c.filter = `blur(${rand}px)`;
+  c.fillStyle = c.strokeStyle = '#fff';
+  c.lineWidth = rand; c.lineJoin = 'round';
+  c.beginPath();
+  umriss.forEach(([y, x], i) => {
+    const px = x / 1000 * w, py = y / 1000 * h;
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  });
+  c.closePath(); c.fill(); c.stroke();
+  const d = c.getImageData(0, 0, w, h).data;
+  const a = new Uint8ClampedArray(w * h);
+  for (let i = 0; i < w * h; i++) a[i] = d[i * 4 + 3];
+  return a;
+}
+
 function studioRender(quelle, opts) {
   const w = quelle.width, h = quelle.height;
   const ctx = quelle.getContext('2d', { willReadFrequently: true });
@@ -845,6 +867,14 @@ function studioRender(quelle, opts) {
   } else {
     alpha = new Uint8ClampedArray(w * h);
     for (let i = 0; i < w * h; i++) alpha[i] = d[i * 4 + 3];
+  }
+
+  /* Umriss vom KI-Dienst: nur das gewählte Teil behalten. Die feinen Kanten
+     kommen weiter vom Freistell-Modell, der Umriss trennt nur, was das Modell
+     nicht trennen kann – Rock vom T-Shirt, Jacke vom Bügel, Kleidung von Armen. */
+  if (opts.umriss) {
+    const m = umrissAlpha(opts.umriss, w, h);
+    for (let i = 0; i < w * h; i++) alpha[i] = (alpha[i] * m[i]) / 255;
   }
 
   if (opts.schatten && (opts.maskCv || opts.freistellen)) {
@@ -1752,7 +1782,7 @@ async function schrankAblegen() {
     zurueck.forEach((it, k) => { karte[k] = it.id; });
     auftraege.push({ schluessel: UI.season + '|' + mood, anfrage, karte });
   }
-  const rumpf = JSON.stringify({ auftraege });
+  const rumpf = JSON.stringify({ auftraege, tz: -new Date().getTimezoneOffset() });
   if (rumpf === _schrankStand) return;         /* nichts geändert – nicht erneut senden */
   try {
     const res = await fetch(basis + '/schrank', {
@@ -2405,8 +2435,10 @@ function renderStudio() {
       ${laedt ? '<div class="studio-laden"><span class="spin"></span><span>Modell wird geladen …</span></div>'
               : '<canvas id="studio-cv"></canvas>'}
     </div>
+    ${studioTeilHTML(s, laedt)}
     <p class="small center" style="margin:10px 0 4px">${
-      s.status === 'ki' ? 'Freigestellt – die Pixel des Teils bleiben unverändert.'
+      s.nachgebildet ? 'Von der KI als Produktfoto nachgebildet – „Original ansehen" zeigt dein Foto.'
+      : s.status === 'ki' ? 'Freigestellt – die Pixel des Teils bleiben unverändert.'
       : s.status === 'alpha' ? 'Bereits freigestellt – nur Licht und Zuschnitt werden angepasst.'
       : s.status === 'laden' ? 'Beim ersten Mal werden 15 MB geladen, danach läuft es offline.'
       : 'Einfacher Freisteller über Farbe und Kanten.'}</p>
@@ -2436,8 +2468,55 @@ function renderStudio() {
   </div></div>`;
 }
 
+/* Welches Teil soll ausgeschnitten werden? Einzahl, weil es um ein Stück geht */
+const TEIL_NAME = { top: 'Oberteil', knit: 'Pullover', blouse: 'Bluse', pants: 'Hose', skirt: 'Rock',
+  dress: 'Kleid', outer: 'Jacke', shoes: 'Schuhe', bag: 'Tasche', acc: 'Accessoire' };
+
+function studioTeilHTML(s, laedt) {
+  if (laedt || !dienstUrl()) return '';
+  if (s.nachgebildet) return `<div class="studio-teil">
+    <button class="btn small" onclick="App.studioOriginal()">${ico('again')} Zurück zu meinem Foto</button></div>`;
+  const nachbilden = _dienst && _dienst.produktfoto;
+  return `<div class="studio-teil">
+    <p class="small">${s.teilLaedt ? `Suche ${TEIL_NAME[s.teilLaedt] === 'Schuhe' ? 'die Schuhe' : 'das Teil'} …`
+      : s.umriss ? `Nur ${esc(TEIL_NAME[s.teilKat])} ausgeschnitten.`
+      : 'Person, Bügel oder anderes mit im Bild? Tippe an, was ausgeschnitten werden soll:'}</p>
+    <div class="chips zeile">
+      ${Object.keys(TEIL_NAME).map(k => `<button class="chip mini ${s.teilKat === k ? 'active' : ''}"
+        onclick="App.studioTeil('${k}')" ${s.teilLaedt ? 'disabled' : ''}>${s.teilLaedt === k ? '<span class="spin mini"></span>' : ''}${TEIL_NAME[k]}</button>`).join('')}
+      ${s.umriss ? `<button class="chip mini leise" onclick="App.studioTeil(null)">Ganzes Motiv</button>` : ''}
+    </div>
+    ${nachbilden && !s.nachgebildet ? `<button class="btn small" style="margin-top:4px" onclick="App.studioNachbilden()"
+      ${s.teilLaedt || s.bildLaedt ? 'disabled' : ''}>${s.bildLaedt ? '<span class="spin mini"></span> Wird nachgebildet …' : `${ico('sparkle')} Als Produktfoto nachbilden`}</button>` : ''}
+  </div>`;
+}
+
+/* Fähigkeiten des Dienstes einmal je Sitzung abfragen – etwa, ob Nachbilden
+   freigeschaltet ist. Kostet kein Kontingent. */
+let _dienst = null;
+async function dienstFaehigkeiten() {
+  if (_dienst || !dienstUrl()) return _dienst;
+  try {
+    const r = await fetch(dienstUrl() + '/status');
+    if (r.ok) _dienst = await r.json();
+  } catch (e) {}
+  return _dienst;
+}
+
+/* Studio-Bild als JPEG für den Dienst – transparente Stellen auf hellem Grund */
+async function studioBild64(cv, max = 1024) {
+  const k = Math.min(1, max / Math.max(cv.width, cv.height));
+  const t = document.createElement('canvas');
+  t.width = Math.round(cv.width * k); t.height = Math.round(cv.height * k);
+  const c = t.getContext('2d');
+  c.fillStyle = '#f2efec'; c.fillRect(0, 0, t.width, t.height);
+  c.drawImage(cv, 0, 0, t.width, t.height);
+  return (await blobToDataURL(await canvasToBlob(t, 'image/jpeg', 0.86))).split(',')[1];
+}
+
 const studioOpts = s => ({
   maskCv: s.maskCv || null,
+  umriss: s.umriss || null,
   freistellen: !s.hatAlpha && !s.maskCv,
   tol: s.tol, belichtung: s.belichtung, licht: s.licht, schatten: s.schatten
 });
@@ -2507,6 +2586,7 @@ function renderModal() {
   return `<div class="overlay" onclick="App.cancelItem()"><div class="sheet" onclick="event.stopPropagation()">
     ${blattKopf(isNew ? 'Neues Teil' : 'Bearbeiten', 'App.cancelItem()')}
     <div class="checker"><img data-pic="${d.picId}" alt=""></div>
+    ${d.nachgebildet ? `<p class="small center" style="margin:8px 0 0">${ico('sparkle')} Von der KI als Produktfoto nachgebildet</p>` : ''}
     ${d.cut ? '' : `<p class="warn" style="margin:8px 0 0">Der Hintergrund ist noch dran. Tipp: in der Fotos-App
       das Teil lange antippen, <b>Motiv kopieren</b>, dann hier einfügen.</p>`}
     <input type="text" value="${esc(d.name || '')}" placeholder="Name, z. B. ${esc(CATS[d.cat].label)} Creme"
@@ -2951,6 +3031,7 @@ async function openStudio(blob) {
     for (let i = 3; i < pd.length; i += 4) if (pd[i] < 24) durchsichtig++;
     const hatAlpha = durchsichtig / (klein.width * klein.height) > 0.02;
 
+    dienstFaehigkeiten().then(() => { if (UI.studio) render(); });
     UI.studio = { gross, klein, vorher: klein, hatAlpha, maskCv: null,
       tol: 0.45, belichtung: 0, licht: true, schatten: false, zeigeVorher: false,
       status: hatAlpha ? 'alpha' : (kiVerfuegbar() ? 'laden' : 'einfach') };
@@ -2975,6 +3056,71 @@ async function openStudio(blob) {
     toast('Das Bild konnte nicht gelesen werden');
   }
 }
+App.studioTeil = async kat => {
+  const s = UI.studio;
+  if (!s) return;
+  if (!kat) { s.umriss = null; s.teilKat = null; render(); return; }
+  s.teilLaedt = kat; render();
+  try {
+    const bild = await studioBild64(s.original || s.gross);
+    const res = await fetch(dienstUrl() + '/umriss', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bild, kategorie: TEIL_NAME[kat] })
+    });
+    const j = await antwortLesen(res);
+    if (UI.studio !== s) return;
+    if (!j.gefunden || !Array.isArray(j.umriss) || j.umriss.length < 3) {
+      toast(`Kein ${TEIL_NAME[kat] === 'Schuhe' ? 'Paar Schuhe' : TEIL_NAME[kat]} im Bild gefunden.`);
+    } else { s.umriss = j.umriss; s.teilKat = kat; s.zeigeVorher = false; }
+  } catch (e) {
+    const t = fehlerText(e);
+    toast(/Stilanalyse/.test(t) ? 'Das Teil konnte gerade nicht erkannt werden. Versuch es gleich noch einmal.' : t);
+  } finally {
+    if (UI.studio === s) { s.teilLaedt = null; render(); }
+  }
+};
+
+/* Nachbilden: aus dem Alltagsfoto ein Produktfoto erzeugen lassen. Bewusst eine
+   eigene Aktion – das Ergebnis ist eine Nachbildung, nicht mehr dein Foto. */
+App.studioNachbilden = async () => {
+  const s = UI.studio;
+  if (!s) return;
+  if (!s.teilKat) { toast('Tippe zuerst an, welches Teil es ist.'); return; }
+  s.bildLaedt = true; render();
+  try {
+    const bild = await studioBild64(s.original || s.gross, 1280);
+    const res = await fetch(dienstUrl() + '/produktfoto', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bild, kategorie: TEIL_NAME[s.teilKat] })
+    });
+    const j = await antwortLesen(res);
+    if (UI.studio !== s) return;
+    const img = await loadImg(`data:${j.mime || 'image/png'};base64,${j.bild}`);
+    s.original = s.original || s.gross;
+    s.vorher = s.klein;
+    s.gross = canvasFrom(img, STUDIO_WORK);
+    s.klein = canvasFrom(img, STUDIO_PREVIEW);
+    s.umriss = null; s.hatAlpha = false; s.maskCv = null; s.nachgebildet = true;
+    s.licht = false; s.status = 'laden'; render();
+    try { s.maskCv = await kiMaske(s.gross); s.status = 'ki'; }
+    catch (e) { s.status = 'einfach'; s.tol = 0.3; }
+  } catch (e) {
+    toast(fehlerText(e));
+  } finally {
+    if (UI.studio === s) { s.bildLaedt = false; render(); }
+  }
+};
+
+App.studioOriginal = async () => {
+  const s = UI.studio;
+  if (!s || !s.original) return;
+  s.gross = s.original; s.klein = s.vorher; s.original = null;
+  s.nachgebildet = false; s.maskCv = null; s.licht = true; s.status = 'laden'; render();
+  try { s.maskCv = await kiMaske(s.gross); s.status = 'ki'; }
+  catch (e) { s.status = 'einfach'; s.tol = 0.3; }
+  if (UI.studio === s) render();
+};
+
 App.studioToggleSchatten = () => { UI.studio.schatten = !UI.studio.schatten; UI.studio.zeigeVorher = false; render(); };
 App.studioToggleLicht = () => { UI.studio.licht = !UI.studio.licht; UI.studio.zeigeVorher = false; render(); };
 App.studioSlide = (key, val) => {
@@ -3003,6 +3149,9 @@ App.studioCommit = async () => {
     UI.studio = null;
     document.querySelector('.toast')?.remove();
     await startDraftFrom(blob, { fertig: true });
+    if (UI.draft && s.teilKat) App.draftSet('cat', s.teilKat, true);
+    if (UI.draft && s.nachgebildet) UI.draft.nachgebildet = true;
+    render();
   } catch (e) {
     console.error(e);
     toast('Das Bild konnte nicht verarbeitet werden');
