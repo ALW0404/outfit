@@ -226,6 +226,23 @@ nebeneinander aufs Bett und fotografiere sie zusammen. Die App findet jedes Teil
 Name), du hakst ab, welche in den Schrank sollen, und jedes wird zum Produktfoto. Danach prüfst du
 die Bilder, erzeugst einzelne neu oder lässt sie weg. Je weniger die Teile übereinanderliegen, desto
 treuer das Ergebnis – Verdecktes muss die KI ergänzen.
+Teile, die zu weniger als der Hälfte zu sehen sind, bietet die App gar nicht erst an – ihre
+Rekonstruktion klappte nie. *Genauer* erzeugt ein Bild noch einmal mit dem größeren Modell.
+
+**Farbe und Muster.** Die Erkennung liefert die Stofffarbe als Farbwert und beschreibt das Muster
+genau (Art, Farben, Abstand, Richtung). Dem Bildmodell geht zusätzlich eine Nahaufnahme aus der Mitte
+des Teils mit. Danach misst die App die Stofffarbe im Originalfoto und schiebt das Ergebnis dorthin –
+das Bildmodell hellte sonst gern auf (sandbeige wurde fast weiß).
+
+**Wunschliste aus Pins.** Im Reiter Trends einen Pin antippen → *Teile auf die Wunschliste*: Die App
+zerlegt den Look in seine Teile und bildet jedes als Produktfoto nach. Wunsch-Teile stehen im Schrank
+unter **Wunschliste**, fließen in keine Vorschläge ein und tragen oben die Shop-Links. Gekauft? Im
+Teil auf den Hinweis tippen, dann wandert es in den Schrank.
+
+**Shop-Links.** Jedes Teil hat Links zu Zalando, About You, Google Shopping und Vinted (gebraucht) –
+mit einem Suchbegriff, den die Erkennung passend formuliert. Eine echte Recherche konkreter
+Produktseiten mit Preis braucht die Google-Suche von Gemini; die ist im kostenlosen Tarif gesperrt
+und wird mit Abrechnung bis 1.500 Suchen am Tag frei (Endpunkt `/shopping` ist vorbereitet).
 
 ## Teile erfassen – der schnelle Weg
 

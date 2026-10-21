@@ -331,7 +331,10 @@ function saveUI() {
     trendGewicht: UI.trendGewicht }));
 }
 const itemById = id => DB.items.find(i => i.id === id);
-const needsSortCount = () => DB.items.filter(i => i.needsSort).length;
+/* Teile aus Pins sind Wünsche, keine Teile im Schrank: sie tauchen in keinem Vorschlag auf */
+const eigene = () => DB.items.filter(i => !i.wunsch);
+const wuensche = () => DB.items.filter(i => i.wunsch);
+const needsSortCount = () => eigene().filter(i => i.needsSort).length;
 /* Teile, die in noch keiner gemerkten Kombination vorkommen – pro Render einmal berechnet */
 let _usedIds = null;
 const istUngenutzt = id => {
@@ -339,7 +342,7 @@ const istUngenutzt = id => {
   return !_usedIds.has(id);
 };
 
-const seasonTodoCount = () => DB.items.filter(i => i.seasonsAuto).length;
+const seasonTodoCount = () => eigene().filter(i => i.seasonsAuto).length;
 
 const LIKE_PAUSE_TAGE = 14;
 /* Kombinationen, die nicht mehr vorgeschlagen werden sollen */
@@ -1040,7 +1043,7 @@ function dunkleBasis(it) {
 }
 const basenVon = items => new Set(items.map(dunkleBasis).filter(Boolean));
 
-const poolFor = season => DB.items.filter(it => itemSeasons(it).includes(season) &&
+const poolFor = season => eigene().filter(it => itemSeasons(it).includes(season) &&
   (istSportModus() ? (istSport(it) || istSneaker(it)) : !istSport(it)) &&
   (UI.mood === SCHICK_ANLASS || !istGlitzer(it)));
 const trendWorlds = () => new Set(DB.trends.flatMap(t => (t.colors || []).map(colorWorld))
@@ -1970,7 +1973,7 @@ function renderToday() {
       <button class="btn small" onclick="App.stylistNichtWarten()">Nicht warten</button>
     </div>`
   : c ? swipeHTML(c, UI.queue.length > 1) + stylistFussHTML()
-  : !DB.items.length ? `<div class="card leer">
+  : !eigene().length ? `<div class="card leer">
       <div class="leer-ico">${ico('sparkle')}</div>
       <h2>Willkommen</h2>
       <p class="hint">Fotografiere ein paar Teile aus deinem Schrank – Oberteile, Hosen oder Röcke und
@@ -2047,7 +2050,7 @@ function renderSorter() {
 }
 
 function renderSeasonSorter() {
-  const todo = DB.items.filter(i => i.seasonsAuto);
+  const todo = eigene().filter(i => i.seasonsAuto);
   if (!todo.length) {
     return `<h1 class="grosstitel">Jahreszeiten</h1>
     <div class="card leer"><div class="leer-ico">${ico('check')}</div><h2>Alles bestätigt</h2>
@@ -2055,7 +2058,7 @@ function renderSeasonSorter() {
       <button class="btn primary block" onclick="App.stopSort()">Zurück zum Schrank</button></div>`;
   }
   const it = todo[0];
-  const gesamt = DB.items.length;
+  const gesamt = eigene().length;
   const gewaehlt = currentSeasonDraft(it);
   return `<h1 class="grosstitel">Jahreszeiten</h1>
   <p class="untertitel">Noch ${todo.length} – bisher nur aus der Wärme geraten.</p>
@@ -2083,7 +2086,7 @@ function currentSeasonDraft(it) {
 }
 
 function renderCatSorter() {
-  const todo = DB.items.filter(i => i.needsSort);
+  const todo = eigene().filter(i => i.needsSort);
   if (!todo.length) {
     return `<h1 class="grosstitel">Nachsortieren</h1>
     <div class="card leer"><div class="leer-ico">${ico('check')}</div><h2>Alles sortiert</h2>
@@ -2107,12 +2110,14 @@ function renderCatSorter() {
 }
 
 function renderCloset() {
-  if (UI.closetFilter === '_ohneki' && !DB.items.some(i => !istAnalysiert(i))) UI.closetFilter = 'all';
+  if (UI.closetFilter === '_ohneki' && !eigene().some(i => !istAnalysiert(i))) UI.closetFilter = 'all';
+  if (UI.closetFilter === 'wunsch' && !wuensche().length) UI.closetFilter = 'all';
   const f = UI.closetFilter;
-  const counts = c => DB.items.filter(i => i.cat === c).length;
+  const counts = c => eigene().filter(i => i.cat === c).length;
   const todo = needsSortCount();
   const stodo = seasonTodoCount();
-  const ohneKi = DB.items.filter(i => !istAnalysiert(i)).length;
+  const ohneKi = eigene().filter(i => !istAnalysiert(i)).length;
+  const nWunsch = wuensche().length;
   return `<h1 class="grosstitel">Schrank</h1>
   ${stodo ? `<button class="banner" onclick="App.startSort('season')">
     <span class="ico">${ico('leaf')}</span>
@@ -2125,8 +2130,9 @@ function renderCloset() {
   ${DB.items.length ? `<div class="suche">${ico('search')}<input type="search" placeholder="Im Schrank suchen"
       value="${esc(UI.suche || '')}" oninput="App.suche(this.value)" enterkeyhint="search"></div>
   <div class="chips zeile">
-    <button class="chip ${f === 'all' ? 'active' : ''}" onclick="App.filterCloset('all')">Alle <span class="zahl">${DB.items.length}</span></button>
-    ${ohneKi && ohneKi < DB.items.length
+    <button class="chip ${f === 'all' ? 'active' : ''}" onclick="App.filterCloset('all')">Alle <span class="zahl">${eigene().length}</span></button>
+    ${nWunsch ? `<button class="chip ${f === 'wunsch' ? 'active' : ''}" onclick="App.filterCloset('wunsch')">${ico('heart')} Wunschliste <span class="zahl">${nWunsch}</span></button>` : ''}
+    ${ohneKi && ohneKi < eigene().length
       ? `<button class="chip ${f === '_ohneki' ? 'active' : ''}" onclick="App.filterCloset('_ohneki')">ohne KI <span class="zahl">${ohneKi}</span></button>` : ''}
     ${CAT_ORDER.filter(c => counts(c)).map(c =>
       `<button class="chip ${f === c ? 'active' : ''}" onclick="App.filterCloset('${c}')">${CATS[c].kurz} <span class="zahl">${counts(c)}</span></button>`).join('')}
@@ -2146,15 +2152,17 @@ function schrankGridHTML() {
   </div>`;
   const f = UI.closetFilter;
   const q = (UI.suche || '').trim().toLowerCase();
-  let list = f === 'all' ? DB.items
-    : f === '_ohneki' ? DB.items.filter(i => !istAnalysiert(i))
-    : DB.items.filter(i => i.cat === f);
+  let list = f === 'all' ? eigene()
+    : f === 'wunsch' ? wuensche()
+    : f === '_ohneki' ? eigene().filter(i => !istAnalysiert(i))
+    : eigene().filter(i => i.cat === f);
   if (q) list = list.filter(i => ((i.name || '') + ' ' + CATS[i.cat].label).toLowerCase().includes(q));
   const sorted = [...list].sort((a, b) =>
     CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (b.addedAt || 0) - (a.addedAt || 0));
   if (!sorted.length) return `<p class="hint center" style="margin-top:30px">${q ? `Nichts gefunden für „${esc(UI.suche.trim())}".` : 'Noch nichts in dieser Kategorie.'}</p>`;
-  const ungenutzt = sorted.some(it => istUngenutzt(it.id));
-  return `<p class="zaehler">${sorted.length} ${sorted.length === 1 ? 'Teil' : 'Teile'}</p>
+  const ungenutzt = f !== 'wunsch' && sorted.some(it => istUngenutzt(it.id));
+  return `${f === 'wunsch' ? '<p class="hint" style="margin:0 4px 10px">Teile aus deinen Pins – sie fließen in keine Vorschläge ein. Antippen zeigt, wo es sie zu kaufen gibt.</p>' : ''}
+    <p class="zaehler">${sorted.length} ${sorted.length === 1 ? 'Teil' : 'Teile'}</p>
     <div class="grid">${sorted.map(it => tileHTML(it)).join('')}</div>
     ${ungenutzt ? '<div class="legende"><span><i style="background:var(--red)"></i>noch in keinem Outfit</span></div>' : ''}`;
 }
@@ -2163,7 +2171,7 @@ function tileHTML(it, onclick) {
   const action = typeof onclick === 'string' ? onclick : `App.editItem('${it.id}')`;
   return `<div class="tile" role="button" onclick="${action}">
     ${it.needsSort ? '<span class="dot" title="Unterkategorie fehlt"></span>' : ''}
-    ${istUngenutzt(it.id) ? '<span class="flag" title="In keiner gemerkten Kombination"></span>' : ''}
+    ${!it.wunsch && istUngenutzt(it.id) ? '<span class="flag" title="In keiner gemerkten Kombination"></span>' : ''}
     <div class="thumbwrap"><img data-pic="${it.picId}" alt="${esc(it.name || '')}"></div>
     <div class="cap">${esc(it.name || CATS[it.cat].label)}</div>
   </div>`;
@@ -2350,11 +2358,11 @@ function renderTrends() {
   ${worlds.length ? `<h3 class="abschnitt">Deine Farbwelten</h3>
     <span class="worldtags" style="margin:0 4px">${worlds.map(w => `<span class="wtag" style="background:var(--surface)">${esc(WORLD_LBL[w])}</span>`).join('')}</span>` : ''}
   <h3 class="abschnitt">Gesammelte Pins${t.length ? ' · ' + t.length : ''}</h3>
-  ${t.length ? `<div class="pins">${t.map(x => `<div class="pin" role="button" onclick="App.delTrend('${x.id}')">
+  ${t.length ? `<div class="pins">${t.map(x => `<div class="pin" role="button" onclick="App.pinAktion('${x.id}')">
       <img data-pic="${x.picId}" alt="">
       ${(x.colors || []).length ? `<div class="swatches">${x.colors.map(c => `<span class="sw" style="background:${esc(c)}"></span>`).join('')}</div>` : ''}
     </div>`).join('')}</div>
-    <p class="small center" style="margin:6px 0 0">Antippen zum Entfernen.</p>`
+    <p class="small center" style="margin:6px 0 0">Antippen: Teile daraus auf die Wunschliste holen oder Pin entfernen.</p>`
     : `<div class="card leer"><div class="leer-ico">${ico('trends')}</div><h2>Noch keine Pins</h2>
       <p class="hint">Sammle Looks, die dir gefallen. Die App liest ihre Farben und bevorzugt sie in den Vorschlägen.</p>
       <button class="btn primary block" onclick="App.aktion('pin')">${ico('plus')} Pin hinzufügen</button></div>`}`;
@@ -2367,7 +2375,7 @@ function renderData() {
       <span class="ltext">${text}${klein ? `<small>${klein}</small>` : ''}</span>${extra || ico('chev', 'chev')}</button>`;
   return `<h1 class="grosstitel">Daten</h1>
   <div class="kennzahlen">
-    <div class="kennzahl"><b>${DB.items.length}</b><span>Teile</span></div>
+    <div class="kennzahl"><b>${eigene().length}</b><span>Teile</span></div>
     <div class="kennzahl"><b>${DB.outfits.length}</b><span>Outfits</span></div>
     <div class="kennzahl"><b>${DB.trends.length}</b><span>Pins</span></div>
   </div>
@@ -2481,7 +2489,7 @@ function studioTeilHTML(s, laedt) {
     Bilde ${esc(s.teilName || TEIL_NAME[s.teilKat] || 'das Teil')} als Produktfoto nach …</p></div>`;
   if (s.nachgebildet) return `<div class="studio-teil">
     <div class="btn-row">
-      <button class="btn small" onclick="App.studioNachbilden()">${ico('dice')} Neu erzeugen</button>
+      <button class="btn small" onclick="App.studioNachbilden()">${ico('dice')} Genauer neu erzeugen</button>
       <button class="btn small" onclick="App.studioOriginal()">${ico('again')} Mein Foto verwenden</button>
     </div></div>`;
   const nachbilden = _dienst && _dienst.produktfoto;
@@ -2537,13 +2545,112 @@ function boxAusUmriss(u) {
   return [Math.min(...ys), Math.min(...xs), Math.max(...ys), Math.max(...xs)];
 }
 
+/* ---- Farbe treu halten ----
+   Das Bildmodell hellt gern auf: eine sandbeige Leinenhose kam fast weiß zurück.
+   Deshalb wird die Stofffarbe im Originalfoto gemessen und das Ergebnis danach
+   im Lab-Raum dorthin geschoben – Helligkeit etwas vorsichtiger, weil Fotos
+   drinnen oft zu dunkel sind. */
+const srgbLin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+const linSrgb = v => 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+function rgbLab(r, g, b) {
+  const R = srgbLin(r), G = srgbLin(g), B = srgbLin(b);
+  const f = t => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
+  const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047);
+  const y = f(0.2126 * R + 0.7152 * G + 0.0722 * B);
+  const z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+function labRgb(L, a, b) {
+  const fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
+  const g = t => t > 0.206893 ? t * t * t : (t - 16 / 116) / 7.787;
+  const X = g(fx) * 0.95047, Y = g(fy), Z = g(fz) * 1.08883;
+  return [linSrgb(3.2406 * X - 1.5372 * Y - 0.4986 * Z), linSrgb(-0.9689 * X + 1.8758 * Y + 0.0415 * Z),
+    linSrgb(0.0557 * X - 0.2040 * Y + 1.0570 * Z)].map(v => clamp(Math.round(v), 0, 255));
+}
+const hexLab = h => { const m = /^#?([0-9a-f]{6})$/i.exec(String(h || '')); if (!m) return null;
+  const n = parseInt(m[1], 16); return rgbLab(n >> 16 & 255, n >> 8 & 255, n & 255); };
+const median = a => { const b = [...a].sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 0; };
+
+/* Mittlere Stofffarbe im Original: Kern der Box (oder des Umrisses), Ausreißer weg */
+function messeStoff(cv, box, umriss) {
+  const kern = box ? [box[0] + (box[2] - box[0]) * 0.3, box[1] + (box[3] - box[1]) * 0.3,
+    box[2] - (box[2] - box[0]) * 0.3, box[3] - (box[3] - box[1]) * 0.3] : [300, 300, 700, 700];
+  const t = ausschnittCanvas(cv, kern, 0);
+  const k = Math.min(1, 120 / Math.max(t.width, t.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(t.width * k)); c.height = Math.max(1, Math.round(t.height * k));
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(t, 0, 0, c.width, c.height);
+  const d = x.getImageData(0, 0, c.width, c.height).data;
+  const L = [], A = [], B = [];
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 200) continue;
+    const [l, a, b] = rgbLab(d[i], d[i + 1], d[i + 2]);
+    L.push(l); A.push(a); B.push(b);
+  }
+  return L.length > 30 ? [median(L), median(A), median(B)] : null;
+}
+
+/* Zielfarbe: gemessen, außer die Messung liegt weit weg von dem, was die Erkennung
+   sah – dann lag im Kern der Box vermutlich ein anderes Teil. */
+function zielFarbe(cv, box, hex) {
+  const m = messeStoff(cv, box), h = hexLab(hex);
+  if (!m) return h;
+  if (!h) return m;
+  const dE = Math.hypot(m[0] - h[0], m[1] - h[1], m[2] - h[2]);
+  return dE > 28 ? h : m;
+}
+
+function farbAngleich(cv, ziel, staerkeL = 0.65, staerkeC = 0.85) {
+  if (!ziel) return cv;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  const img = ctx.getImageData(0, 0, cv.width, cv.height), d = img.data;
+  const L = [], A = [], B = [];
+  const schritt = Math.max(1, Math.floor(d.length / 4 / 40000)) * 4;
+  for (let i = 0; i < d.length; i += schritt) {
+    if (d[i + 3] < 220) continue;
+    const [l, a, b] = rgbLab(d[i], d[i + 1], d[i + 2]);
+    L.push(l); A.push(a); B.push(b);
+  }
+  if (L.length < 50) return cv;
+  const dL = (ziel[0] - median(L)) * staerkeL, da = (ziel[1] - median(A)) * staerkeC, db = (ziel[2] - median(B)) * staerkeC;
+  if (Math.abs(dL) < 1.5 && Math.abs(da) < 1.5 && Math.abs(db) < 1.5) return cv;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] === 0) continue;
+    const [l, a, b] = rgbLab(d[i], d[i + 1], d[i + 2]);
+    const [r, g, bl] = labRgb(clamp(l + dL, 0, 100), a + da, b + db);
+    d[i] = r; d[i + 1] = g; d[i + 2] = bl;
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
+
 /* Ein Teil als Produktfoto nachbilden lassen und gleich vom weißen Grund lösen */
-async function nachbilden(cv, box, kat, beschreibung, qualitaet) {
-  const bild = await studioBild64(ausschnittCanvas(cv, box), 512);
+/* Auf Arbeitsgröße bringen: zu kleine Ausschnitte (Tasche in einem Pin) lehnt
+   das Modell mit „Invalid input" ab, größere als 512 Pixel ebenso */
+function aufMass(cv, min = 320, max = 504) {
+  const k = clamp(min / Math.min(cv.width, cv.height), Math.min(1, max / Math.max(cv.width, cv.height)), max / Math.max(cv.width, cv.height));
+  if (Math.abs(k - 1) < 0.01) return cv;
+  const t = document.createElement('canvas');
+  t.width = Math.max(1, Math.round(cv.width * k)); t.height = Math.max(1, Math.round(cv.height * k));
+  const c = t.getContext('2d'); c.imageSmoothingQuality = 'high';
+  c.drawImage(cv, 0, 0, t.width, t.height);
+  return t;
+}
+
+async function nachbilden(cv, box, kat, beschreibung, qualitaet, extra = {}) {
+  const bild = await studioBild64(aufMass(ausschnittCanvas(cv, box)), 512);
+  /* Zweite Vorlage: Nahaufnahme aus der Mitte des Teils, damit Farbe und Muster
+     nicht in 512 Pixeln verloren gehen */
+  const kern = box ? [box[0] + (box[2] - box[0]) * 0.32, box[1] + (box[3] - box[1]) * 0.32,
+    box[2] - (box[2] - box[0]) * 0.32, box[3] - (box[3] - box[1]) * 0.32] : null;
+  const kernCv = kern ? ausschnittCanvas(cv, kern, 0) : null;
+  const detail = kernCv && Math.min(kernCv.width, kernCv.height) >= 48 ? await studioBild64(aufMass(kernCv, 256), 512) : '';
   const res = await fetch(dienstUrl() + '/produktfoto', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bild, kategorie: TEIL_NAME[kat], kategorieEn: KAT_EN[kat],
-      beschreibung: beschreibung || '', qualitaet: qualitaet || 'schnell' })
+    body: JSON.stringify({ bild, detail, kategorie: TEIL_NAME[kat], kategorieEn: KAT_EN[kat],
+      beschreibung: beschreibung || '', farbe: extra.farbe || '', muster: extra.muster || '',
+      qualitaet: qualitaet || 'schnell' })
   });
   const j = await antwortLesen(res);
   const img = await loadImg(`data:${j.mime || 'image/jpeg'};base64,${j.bild}`);
@@ -2585,7 +2692,8 @@ function drawStudioPreview() {
   const s = UI.studio;
   const cv = $('#studio-cv');
   if (!s || !cv) return;
-  const quelle = s.zeigeVorher ? s.vorher : studioRender(s.klein, studioOpts(s));
+  let quelle = s.zeigeVorher ? s.vorher : studioRender(s.klein, studioOpts(s));
+  if (!s.zeigeVorher && s.nachgebildet && s.zielFarbe) quelle = farbAngleich(quelle, s.zielFarbe);
   cv.width = quelle.width; cv.height = quelle.height;
   cv.getContext('2d').drawImage(quelle, 0, 0);
 }
@@ -2640,6 +2748,20 @@ function renderModal() {
     </div></div>`;
   }
   if (UI.modal === 'haufen') return renderHaufen();
+  if (UI.modal === 'pin-aktion') {
+    const p = DB.trends.find(x => x.id === UI.pinId);
+    if (!p) return '';
+    return `<div class="overlay" onclick="App.aktionZu()"><div class="sheet kurz" onclick="event.stopPropagation()">
+      ${blattKopf('Pin', 'App.aktionZu()')}
+      <div class="checker" style="min-height:0; padding:10px"><img data-pic="${p.picId}" alt="" style="max-height:220px; border-radius:12px; filter:none"></div>
+      <div class="liste" style="margin-top:12px">
+        ${dienstUrl() ? `<button class="zeile-l" onclick="App.pinZerlegen('${p.id}')"><span class="lico akzent">${ico('layers')}</span>
+          <span class="ltext">Teile auf die Wunschliste<small>Jedes Teil des Looks als Produktfoto – mit Shop-Links</small></span>${ico('chev', 'chev')}</button>` : ''}
+        <button class="zeile-l rot" onclick="App.pinLoeschen('${p.id}')"><span class="lico rot">${ico('trash')}</span>
+          <span class="ltext">Pin entfernen</span></button>
+      </div>
+    </div></div>`;
+  }
   if (UI.modal === 'pick') return renderPicker();
   if (UI.modal === 'itempick') return renderItemPicker();
   if (UI.modal !== 'item' || !UI.draft) return '';
@@ -2650,6 +2772,10 @@ function renderModal() {
     ${blattKopf(isNew ? 'Neues Teil' : 'Bearbeiten', 'App.cancelItem()')}
     <div class="checker"><img data-pic="${d.picId}" alt=""></div>
     ${d.nachgebildet ? `<p class="small center" style="margin:8px 0 0">${ico('sparkle')} Von der KI als Produktfoto nachgebildet</p>` : ''}
+    ${d.wunsch ? `<div class="banner" style="margin:12px 0 0" role="button" onclick="App.wunschGekauft()">
+      <span class="ico">${ico('heart')}</span><span><b>Auf deiner Wunschliste</b>
+      <span class="small">Gekauft? Hier tippen – dann kommt es in deinen Schrank.</span></span>${ico('chev', 'chev')}</div>
+      ${shopHTML(d, 'Kaufen')}` : ''}
     ${d.cut ? '' : `<p class="warn" style="margin:8px 0 0">Der Hintergrund ist noch dran. Tipp: in der Fotos-App
       das Teil lange antippen, <b>Motiv kopieren</b>, dann hier einfügen.</p>`}
     <input type="text" value="${esc(d.name || '')}" placeholder="Name, z. B. ${esc(CATS[d.cat].label)} Creme"
@@ -2698,6 +2824,7 @@ function renderModal() {
       </span>
       <div><button class="linkbtn" style="margin-top:6px" onclick="App.analyseEins('${d.id}')">${ico('again')} Neu analysieren</button></div>`;
     })()}
+    ${d.wunsch ? '' : shopHTML(d, 'Ähnliches finden')}
     <h3 class="abschnitt" style="margin-left:0">Farben</h3>
     <div class="swatches">
       ${(d.colors || []).map(c => `<span class="sw big" style="background:${esc(c)}"></span>`).join('')
@@ -2714,7 +2841,7 @@ function renderModal() {
 }
 
 function renderItemPicker() {
-  const list = [...DB.items].sort((a, b) =>
+  const list = [...eigene()].sort((a, b) =>
     CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || (a.name || '').localeCompare(b.name || ''));
   return `<div class="overlay" onclick="App.closeItemPick()"><div class="sheet" onclick="event.stopPropagation()">
     ${blattKopf('Outfits mit …', 'App.closeItemPick()')}
@@ -2727,7 +2854,7 @@ function renderItemPicker() {
 function renderPicker() {
   const slot = SLOTS.find(s => s.key === UI.picker);
   if (!slot) return '';
-  const list = DB.items.filter(i => slot.cats.includes(i.cat))
+  const list = eigene().filter(i => slot.cats.includes(i.cat))
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   return `<div class="overlay" onclick="App.closePick()"><div class="sheet" onclick="event.stopPropagation()">
     ${blattKopf(esc(slot.label), 'App.closePick()')}
@@ -2888,6 +3015,42 @@ App.suche = v => {
 };
 App.profilAuf = () => { UI.profilOffen = true; render(); };
 App.profilZu = () => { UI.profilOffen = false; render(); };
+App.pinAktion = id => { UI.pinId = id; UI.modal = 'pin-aktion'; renderOverlay(); };
+App.pinLoeschen = async id => { UI.modal = null; renderOverlay(); await App.delTrend(id); };
+App.pinZerlegen = async id => {
+  const p = DB.trends.find(x => x.id === id);
+  if (!p) return;
+  const blob = await picGet(p.picId);
+  if (!blob) { toast('Das Bild des Pins fehlt.'); return; }
+  UI.modal = null;
+  await openHaufen(blob, true);
+  if (UI.haufen) UI.haufen.pinId = id;
+};
+App.wunschGekauft = () => {
+  const d = UI.draft;
+  if (!d) return;
+  delete d.wunsch; delete d.pinId;
+  d.seasonsAuto = true;
+  toast('Willkommen im Schrank! Speichern nicht vergessen.');
+  render();
+};
+
+/* Shop-Links: echte Suchseiten mit einem präzisen Suchbegriff. Eine echte
+   Produktrecherche per Google-Suche ist im kostenlosen Gemini-Tarif gesperrt –
+   mit Abrechnung sind 1.500 Suchen am Tag frei, dann kommt sie hier dazu. */
+const shopHTML = (d, titel) => `<h3 class="abschnitt" style="margin-left:0">${titel}</h3>
+    <div class="chips">${shopLinks(d).map(([n, u]) =>
+      `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener">${esc(n)} ${ico('more')}</a>`).join('')}</div>`;
+function shopLinks(it) {
+  const q = encodeURIComponent(String(it.suchbegriff || it.name || CATS[it.cat].label).replace(/\s+/g, ' ').trim());
+  return [
+    ['Zalando', `https://www.zalando.de/katalog/?q=${q}`],
+    ['About You', `https://www.aboutyou.de/suche?term=${q}`],
+    ['Google Shopping', `https://www.google.com/search?tbm=shop&q=${q}`],
+    ['Vinted · gebraucht', `https://www.vinted.de/catalog?search_text=${q}`]
+  ];
+}
+
 App.teilAusOutfit = id => { UI.detail = null; App.editItem(id); };
 App.stylistNeu = () => stylistHolen(true);
 /* Wer nicht warten will, bekommt sofort die lokale Auswahl; die Ergebnisse
@@ -3139,6 +3302,7 @@ App.studioTeil = async kat => {
       s.umriss = j.umriss; s.teilKat = kat; s.zeigeVorher = false;
       s.teilName = String(j.name || '').slice(0, 60);
       s.beschreibung = String(j.beschreibung || '').slice(0, 300);
+      s.farbe = j.farbe_hex || ''; s.muster = j.muster || ''; s.suchbegriff = String(j.suchbegriff || '').slice(0, 80);
       s.box = Array.isArray(j.box_2d) && j.box_2d.length === 4 ? j.box_2d : boxAusUmriss(j.umriss);
       /* Jedes Foto soll wie ein Produktbild aussehen – also gleich nachbilden,
          wenn der Dienst das kann. „Zurück zu meinem Foto" macht es rückgängig. */
@@ -3160,8 +3324,11 @@ App.studioNachbilden = async () => {
   if (!s.teilKat) { toast('Tippe zuerst an, welches Teil es ist.'); return; }
   s.bildLaedt = true; render();
   try {
-    const neu = await nachbilden(s.original || s.gross, s.box, s.teilKat, s.beschreibung);
+    const quelle = s.original || s.gross;
+    const neu = await nachbilden(quelle, s.box, s.teilKat, s.beschreibung, s.nachgebildet ? 'fein' : 'schnell',
+      { farbe: s.farbe, muster: s.muster });
     if (UI.studio !== s) return;
+    s.zielFarbe = s.zielFarbe || zielFarbe(quelle, s.box, s.farbe);
     if (!s.original) { s.original = s.gross; s.vorher = s.klein; }
     s.gross = neu;
     s.klein = canvasFrom(neu, STUDIO_PREVIEW);
@@ -3197,23 +3364,31 @@ const daumen = (cv, max = 240) => {
   return t.toDataURL('image/png');
 };
 
-async function openHaufen(file) {
+const HAUFEN_MIN_SICHTBAR = 50;
+
+async function openHaufen(file, wunsch) {
   const url = URL.createObjectURL(file);
   try {
     const img = await loadImg(url);
     const bild = canvasFrom(img, 2000);
-    UI.haufen = { bild, foto: daumen(bild, 700), status: 'erkennen', teile: [] };
+    UI.haufen = { bild, foto: daumen(bild, 700), status: 'erkennen', teile: [], wunsch: !!wunsch };
     UI.modal = 'haufen'; render();
     const res = await fetch(dienstUrl() + '/haufen', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bild: await studioBild64(bild, 1280) })
+      body: JSON.stringify({ bild: await studioBild64(bild, 1280), getragen: !!wunsch })
     });
     const j = await antwortLesen(res);
     const h = UI.haufen;
     if (!h) return;
-    h.teile = (j.teile || []).filter(t => CATS[t.kategorie]).map(t => ({
+    /* Zu stark verdeckte Teile gar nicht erst anbieten – die Rekonstruktion
+       klappte bei ihnen nie. */
+    const alle = (j.teile || []).filter(t => CATS[t.kategorie]);
+    const sichtbar = t => (t.sichtbar ?? 100) >= HAUFEN_MIN_SICHTBAR;
+    h.ausgeblendet = alle.filter(t => !sichtbar(t)).length;
+    h.teile = alle.filter(sichtbar).map(t => ({
       kat: t.kategorie, name: String(t.name || '').slice(0, 60), beschreibung: String(t.beschreibung || '').slice(0, 300),
-      box: t.box_2d, verdeckt: !!t.verdeckt, an: true, zustand: 'offen',
+      farbe: t.farbe_hex || '', muster: t.muster || '', suchbegriff: String(t.suchbegriff || '').slice(0, 80),
+      box: t.box_2d, verdeckt: (t.sichtbar ?? 100) < 75, an: true, zustand: 'offen',
       vorschau: daumen(ausschnittCanvas(bild, t.box_2d, 0.03), 220)
     }));
     h.status = h.teile.length ? 'auswahl' : 'leer';
@@ -3234,11 +3409,13 @@ App.haufenZu = () => {
   UI.haufen = null; UI.modal = null; render();
 };
 
-async function haufenBildeEins(h, t) {
+async function haufenBildeEins(h, t, fein) {
   t.zustand = 'laeuft'; render();
   try {
-    const neu = await nachbilden(h.bild, t.box, t.kat, t.beschreibung);
-    const frei = await vomWeissLoesen(neu);
+    const neu = await nachbilden(h.bild, t.box, t.kat, t.beschreibung, fein ? 'fein' : 'schnell',
+      { farbe: t.farbe, muster: t.muster });
+    t.zielFarbe = t.zielFarbe || zielFarbe(h.bild, t.box, t.farbe);
+    const frei = farbAngleich(await vomWeissLoesen(neu), t.zielFarbe);
     t.ergebnis = frei; t.ergebnisVorschau = daumen(frei, 300);
     t.zustand = 'fertig'; t.behalten = true;
   } catch (e) {
@@ -3263,7 +3440,7 @@ App.haufenBilden = async () => {
 App.haufenNochmal = async i => {
   const h = UI.haufen; const t = h && h.teile[i];
   if (!t || t.zustand === 'laeuft') return;
-  await haufenBildeEins(h, t);
+  await haufenBildeEins(h, t, true);   /* zweiter Versuch mit dem genaueren Modell */
 };
 App.haufenBehalten = i => { const t = UI.haufen && UI.haufen.teile[i]; if (t) { t.behalten = !t.behalten; render(); } };
 
@@ -3282,16 +3459,18 @@ App.haufenUebernehmen = async () => {
       await picPut(picId, out);
       const w = CATS[t.kat].warmth;
       DB.items.push({ id: uid(), picId, colors, cut, ar, cat: t.kat, name: t.name,
-        warmth: w, formality: 3, seasons: seasonsFromWarmth(w), seasonsAuto: true,
-        addedAt: Date.now(), nachgebildet: true });
+        warmth: w, formality: 3, seasons: seasonsFromWarmth(w), seasonsAuto: !h.wunsch,
+        addedAt: Date.now(), nachgebildet: true, beschreibung: t.beschreibung, suchbegriff: t.suchbegriff || '',
+        ...(h.wunsch ? { wunsch: true, pinId: h.pinId || null } : {}) });
       n++;
     } catch (e) { console.warn('Teil nicht gespeichert', e); }
   }
   save();
   UI.haufen = null; UI.modal = null; UI.queue = null;
-  UI.tab = 'closet'; UI.closetFilter = 'all';
+  UI.tab = 'closet'; UI.closetFilter = h.wunsch ? 'wunsch' : 'all';
   render();
-  toast(`${n} ${n === 1 ? 'Teil' : 'Teile'} im Schrank – Jahreszeiten kurz bestätigen`);
+  toast(h.wunsch ? `${n} ${n === 1 ? 'Teil' : 'Teile'} auf der Wunschliste`
+    : `${n} ${n === 1 ? 'Teil' : 'Teile'} im Schrank – Jahreszeiten kurz bestätigen`);
 };
 
 function renderHaufen() {
@@ -3300,7 +3479,7 @@ function renderHaufen() {
   const an = h.teile.filter(t => t.an).length;
   const fertig = h.teile.filter(t => t.zustand === 'fertig').length;
   const behalten = h.teile.filter(t => t.zustand === 'fertig' && t.behalten).length;
-  const titel = { erkennen: 'Teile erkennen', auswahl: `${h.teile.length} Teile gefunden`, bilden: 'Produktfotos entstehen',
+  const titel = { erkennen: h.wunsch ? 'Look zerlegen' : 'Teile erkennen', auswahl: `${h.teile.length} ${h.teile.length === 1 ? 'Teil' : 'Teile'} gefunden`, bilden: 'Produktfotos entstehen',
     pruefen: 'Prüfen', speichern: 'Speichern', leer: 'Nichts gefunden', fehler: 'Hat nicht geklappt' }[h.status];
   const karte = (t, i) => {
     const bild = t.ergebnisVorschau || t.vorschau;
@@ -3315,7 +3494,7 @@ function renderHaufen() {
       <div class="hname">${esc(t.name || TEIL_NAME[t.kat])}</div>
       <div class="hkat">${esc(CATS[t.kat].label)}${t.verdeckt && !t.ergebnisVorschau ? ' · teils verdeckt' : ''}</div>
       ${t.zustand === 'fehler' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('again')} Nochmal</button>` : ''}
-      ${t.zustand === 'fertig' && h.status === 'pruefen' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('dice')} Neu erzeugen</button>` : ''}
+      ${t.zustand === 'fertig' && h.status === 'pruefen' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('dice')} Genauer</button>` : ''}
     </div>`;
   };
   return `<div class="overlay" onclick="App.haufenZu()"><div class="sheet" onclick="event.stopPropagation()">
@@ -3325,19 +3504,20 @@ function renderHaufen() {
     ${h.status === 'leer' ? `<p class="hint">Auf dem Foto habe ich keine Kleidung gefunden. Am besten klappt es mit Abstand,
       gutem Licht und Teilen, die nicht ganz übereinanderliegen.</p>` : ''}
     ${h.status === 'fehler' ? `<p class="hint">${esc(h.meldung || 'Die Erkennung hat nicht geklappt.')}</p>` : ''}
-    ${h.status === 'auswahl' ? `<p class="hint" style="margin-top:-6px">Tippe an, welche Teile in den Schrank sollen. Jedes wird
-      als Produktfoto nachgebildet${h.teile.some(t => t.verdeckt) ? ' – bei verdeckten Teilen ergänzt die KI, was sie nicht sieht' : ''}.</p>` : ''}
+    ${h.status === 'auswahl' ? `<p class="hint" style="margin-top:-6px">Tippe an, welche Teile ${h.wunsch ? 'auf die Wunschliste' : 'in den Schrank'}
+      sollen. Jedes wird als Produktfoto nachgebildet${h.teile.some(t => t.verdeckt) ? ' – bei teils verdeckten ergänzt die KI, was sie nicht sieht' : ''}.
+      ${h.ausgeblendet ? `<br><span class="small">${h.ausgeblendet} ${h.ausgeblendet === 1 ? 'weiteres Teil war' : 'weitere Teile waren'} zu weniger als der Hälfte zu sehen und ${h.ausgeblendet === 1 ? 'wird' : 'werden'} nicht angeboten.</span>` : ''}</p>` : ''}
     ${h.status === 'bilden' ? `<p class="hint" style="margin-top:-6px">${fertig} von ${an} fertig – etwa 10 Sekunden je Teil.</p>
       <div class="fortschritt"><i style="width:${Math.round(fertig * 100 / Math.max(1, an))}%"></i></div>` : ''}
     ${h.status === 'pruefen' ? `<p class="hint" style="margin-top:-6px">Tippe Bilder an, die du nicht willst. Nicht getroffen?
-      <i>Neu erzeugen</i> versucht es noch einmal.</p>` : ''}
+      <i>Genauer</i> versucht es noch einmal mit dem größeren Modell.</p>` : ''}
     ${h.teile.length && h.status !== 'erkennen' ? `<div class="hgrid">${h.teile.map((t, i) =>
       h.status === 'auswahl' || t.an ? karte(t, i) : '').join('')}</div>` : ''}
     <div class="sheet-fuss">
       ${h.status === 'auswahl' ? `<button class="btn primary block" onclick="App.haufenBilden()" ${an ? '' : 'disabled'}>${ico('sparkle')}
         ${an} ${an === 1 ? 'Teil' : 'Teile'} als Produktfoto anlegen</button>` : ''}
       ${h.status === 'pruefen' ? `<button class="btn primary block" onclick="App.haufenUebernehmen()" ${behalten ? '' : 'disabled'}>
-        ${behalten} ${behalten === 1 ? 'Teil' : 'Teile'} in den Schrank</button>` : ''}
+        ${behalten} ${behalten === 1 ? 'Teil' : 'Teile'} ${h.wunsch ? 'auf die Wunschliste' : 'in den Schrank'}</button>` : ''}
       ${h.status === 'speichern' ? `<button class="btn primary block" disabled><span class="spin mini"></span> Wird gespeichert …</button>` : ''}
       ${['leer', 'fehler'].includes(h.status) ? `<button class="btn block" onclick="App.haufenZu()">Schließen</button>` : ''}
     </div>
@@ -3367,13 +3547,15 @@ App.studioCommit = async () => {
   toast('Wird gerechnet …');
   await new Promise(r => setTimeout(r, 30));   /* Toast zeigen, bevor der Hauptfaden blockiert */
   try {
-    const out = studioRender(s.gross, studioOpts(s));
+    let out = studioRender(s.gross, studioOpts(s));
+    if (s.nachgebildet && s.zielFarbe) out = farbAngleich(out, s.zielFarbe);
     const blob = await encode(out, true);
     UI.studio = null;
     document.querySelector('.toast')?.remove();
     await startDraftFrom(blob, { fertig: true });
     if (UI.draft && s.teilKat) App.draftSet('cat', s.teilKat, true);
     if (UI.draft && s.teilName && !UI.draft.name) UI.draft.name = s.teilName;
+    if (UI.draft && s.suchbegriff) UI.draft.suchbegriff = s.suchbegriff;
     if (UI.draft && s.nachgebildet) UI.draft.nachgebildet = true;
     render();
   } catch (e) {

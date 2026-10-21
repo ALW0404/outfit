@@ -273,6 +273,8 @@ input[type=range]::-moz-range-thumb{width:26px; height:26px; border:0; border-ra
 }
 .card .chip, .sheet .chip{background:var(--surface-2); box-shadow:none;}
 .chip .i{width:15px; height:15px;}
+a.chip{text-decoration:none; color:var(--ink);}
+a.chip .i{width:12px; height:12px; opacity:.5;}
 .chip .zahl{color:var(--ink-3); font-weight:500; font-variant-numeric:tabular-nums;}
 .chip:active{transform:scale(.94);}
 .chip.active, .card .chip.active, .sheet .chip.active{background:var(--ink); color:var(--bg);}

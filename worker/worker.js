@@ -386,16 +386,26 @@ const SCHEMA_UMRISS = {
     box_2d: { type: 'ARRAY', items: { type: 'INTEGER' } },
     umriss: { type: 'ARRAY', items: { type: 'ARRAY', items: { type: 'INTEGER' } } },
     name: { type: 'STRING' },
-    beschreibung: { type: 'STRING' }
+    beschreibung: { type: 'STRING' },
+    farbe_hex: { type: 'STRING' },
+    muster: { type: 'STRING' },
+    suchbegriff: { type: 'STRING' }
   },
-  required: ['gefunden', 'box_2d', 'umriss', 'name', 'beschreibung']
+  required: ['gefunden', 'box_2d', 'umriss', 'name', 'beschreibung', 'farbe_hex', 'muster', 'suchbegriff']
 };
 
 /* Beschreibung für das Nachbilden: Ohne sie erfindet das Bildmodell Details –
    aus einem Rock mit Gummibund wurde einer mit Knopf und Bundfalten. */
-const BESCHREIBUNG_HINWEIS = `name: kurzer deutscher Name wie im Shop, Art + Farbe, etwa "Ballonrock Schwarz" oder "Blouson Beige mit Karo-Aufschlag".
-beschreibung: auf Englisch, 20–40 Wörter, nur Sichtbares: exakte Farbe, Material/Optik, Muster, Schnitt und Passform,
-Länge (z. B. midi, reaching mid-calf), Bund, Kragen, Ärmel, Verschlüsse, Taschen, Säume und besondere Details.`;
+const BESCHREIBUNG_HINWEIS = `name: kurzer deutscher Name wie im Shop, Art + Farbe, etwa "Ballonrock Schwarz" oder "Leinenhose Beige mit Nadelstreifen".
+beschreibung: auf Englisch, 25–45 Wörter, nur Sichtbares: exakte Farbe mit Unterton (z. B. "warm sand beige with light
+brown undertone", nicht einfach "beige" oder "white"), Material und Oberfläche, Schnitt und Passform, Länge, Bund, Kragen,
+Ärmel, Verschlüsse, Taschen, Säume, besondere Details.
+farbe_hex: die tatsächliche Hauptfarbe des Stoffs als Hex-Wert, wie sie bei neutralem Tageslicht aussähe – nicht
+heller oder weißer als im Foto.
+muster: auf Englisch, genau: Art (solid, pinstripe, check, gingham, herringbone, floral, leopard …), Farben des Musters,
+Abstand/Größe und Richtung, etwa "thin dark brown vertical pinstripes about 1 cm apart on sand beige". "solid", wenn uni.
+suchbegriff: deutscher Suchbegriff für Online-Shops, 3–6 Wörter, so wie man das Teil bei Zalando suchen würde,
+etwa "Rollkragenpullover Wolle beige oversized" oder "Leinenhose Nadelstreifen beige weit".`;
 /* ===== Haufen =====
    Erkennt mehrere Kleidungsstücke auf einem Foto – etwa ein Stapel auf dem Bett –
    mit Kategorie, Namen, Beschreibung und Lage. Kostenloses Textmodell. */
@@ -412,9 +422,12 @@ const SCHEMA_HAUFEN = {
           name: { type: 'STRING' },
           beschreibung: { type: 'STRING' },
           box_2d: { type: 'ARRAY', items: { type: 'INTEGER' } },
-          verdeckt: { type: 'BOOLEAN' }
+          sichtbar: { type: 'INTEGER' },
+          farbe_hex: { type: 'STRING' },
+          muster: { type: 'STRING' },
+          suchbegriff: { type: 'STRING' }
         },
-        required: ['kategorie', 'name', 'beschreibung', 'box_2d', 'verdeckt']
+        required: ['kategorie', 'name', 'beschreibung', 'box_2d', 'sichtbar', 'farbe_hex', 'muster', 'suchbegriff']
       }
     }
   },
@@ -429,16 +442,62 @@ blouse = Blusen und Hemden; pants = Hosen, Jeans, Shorts, Leggings; skirt = Röc
 Jumpsuits; outer = Jacken, Mäntel, Blazer, Westen; shoes = Schuhe; bag = Taschen; acc = Gürtel, Tücher,
 Mützen, Schmuck.
 box_2d: [y0, x0, y1, x1] normiert auf 0–1000, das ganze sichtbare Teil.
-verdeckt: true, wenn mehr als ein Drittel des Teils verdeckt oder gefaltet ist.
+sichtbar: geschätzter Anteil des ganzen Teils in Prozent, der im Foto zu sehen ist (0–100). Verdeckt, abgeschnitten
+am Bildrand oder weggefaltet zählt als nicht sichtbar. Sei ehrlich: ein Ärmel, der unter einem Pullover hervorschaut, ist 10.
 ` + BESCHREIBUNG_HINWEIS;
+/* Für Pinterest-Pins: Dort trägt meist eine Person das Outfit */
+const PROMPT_GETRAGEN = `Das Foto zeigt ein Outfit, meist von einer Person getragen. Finde jedes Kleidungsstück, jedes Paar
+Schuhe, jede Tasche und jedes deutlich erkennbare Accessoire dieses Outfits, höchstens 8. Kleidung, die getragen wird, zählt
+mit; Haut, Haare und Hintergrund nicht.`;
 
 async function haufen(env, body) {
   const bild = String(body.bild || '');
   if (!bild || bild.length > 6_000_000) return { fehler: 'Bild fehlt oder ist zu groß' };
-  const ergebnis = await gemini(env, [{ text: PROMPT_HAUFEN }, { inline_data: { mime_type: 'image/jpeg', data: bild } }],
-    SCHEMA_HAUFEN, 0.1, env.HAUFEN_MODEL || 'gemini-flash-latest');
-  ergebnis.teile = (ergebnis.teile || []).filter(t => Array.isArray(t.box_2d) && t.box_2d.length === 4).slice(0, 12);
+  const prompt = body.getragen ? PROMPT_GETRAGEN + '\n\n' + PROMPT_HAUFEN.split('\n\n').slice(1).join('\n\n') : PROMPT_HAUFEN;
+  const ergebnis = await gemini(env, [{ text: prompt }, { inline_data: { mime_type: 'image/jpeg', data: bild } }],
+    SCHEMA_HAUFEN, 0.1, env.HAUFEN_MODEL || 'gemini-flash-lite-latest');   /* das große Modell brauchte bis zu 2 Minuten */
+  ergebnis.teile = (ergebnis.teile || []).filter(t => Array.isArray(t.box_2d) && t.box_2d.length === 4).slice(0, 12)
+    .map(t => ({ ...t, verdeckt: (t.sichtbar ?? 100) < 70 }));
   return ergebnis;
+}
+
+/* ===== Shopping =====
+   Sucht per Google-Suche (Grounding) Shops, die das Teil oder ein sehr ähnliches
+   führen. Links kommen ausschließlich aus echten Suchtreffern, nicht aus dem Text
+   des Modells – erfundene Adressen sind so ausgeschlossen. */
+async function echteAdresse(uri) {
+  try {
+    const r = await fetch(uri, { method: 'GET', redirect: 'manual' });
+    return r.headers.get('location') || uri;
+  } catch { return uri; }
+}
+async function shopping(env, body) {
+  const was = String(body.beschreibung || body.name || '').slice(0, 400);
+  if (!was) return { fehler: 'Beschreibung fehlt' };
+  const text = `Finde 4 bis 6 konkrete Produktseiten in Online-Shops, die in Deutschland liefern, auf denen man genau dieses
+Kleidungsstück oder ein sehr ähnliches kaufen kann: ${was}.
+Antworte je Treffer in einer Zeile im Format: Shop | Produktname | Preis in Euro (oder "?")`;
+  const rumpf = { contents: [{ parts: [{ text }] }], tools: [{ google_search: {} }] };
+  let letzter;
+  /* Suche ist nicht bei jedem Modell im kostenlosen Tarif frei – der Reihe nach probieren */
+  const SHOP_MODELLE = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-flash-latest'];
+  const wunsch = SHOP_MODELLE.includes(body.modell) ? [body.modell] : [];
+  for (const m of [...wunsch, ...(env.SHOP_MODEL ? [env.SHOP_MODEL] : []), ...SHOP_MODELLE]) {
+    try {
+      const { daten } = await geminiRuf(env, `models/${m}:generateContent`, rumpf);
+      const k = daten?.candidates?.[0] || {};
+      const antwort = (k.content?.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join('');
+      const quellen = (k.groundingMetadata?.groundingChunks || []).map(c => c.web).filter(Boolean).slice(0, 8);
+      const links = await Promise.all(quellen.map(async q => ({ titel: q.title || '', url: await echteAdresse(q.uri) })));
+      const zeilen = antwort.split('\n').map(z => z.split('|').map(x => x.replace(/[*#]/g, '').trim())).filter(z => z.length >= 3)
+        .map(([shop, produkt, preis]) => ({ shop, produkt, preis }));
+      return { links, zeilen, modell: m };
+    } catch (e) {
+      letzter = e;
+      if (!/\b(404|429|500|503)\b/.test(String(e.message))) break;
+    }
+  }
+  throw letzter;
 }
 
 async function umriss(env, body) {
@@ -473,9 +532,13 @@ const FLUX_MODELLE = {
   schnell: '@cf/black-forest-labs/flux-2-klein-4b',     /* ~110 Neurons */
   fein:    '@cf/black-forest-labs/flux-2-klein-9b'      /* ~1.550 Neurons */
 };
-const PROMPT_FLUX = (was, beschreibung) => `Professional e-commerce product photo of the ${was} from the reference image${beschreibung ? ` (${beschreibung})` : ''}.
+const PROMPT_FLUX = (was, beschreibung, farbe, muster, detail) => `Professional e-commerce product photo of the ${was} from the first reference image${beschreibung ? ` (${beschreibung})` : ''}.
+${farbe ? `Exact fabric color: ${farbe}. Keep exactly this tone, brightness and saturation – do not lighten, whiten or desaturate it.` : ''}
+${muster && !/^solid/i.test(muster) ? `Pattern: ${muster}. Reproduce the pattern exactly in scale, spacing, direction and color.` : ''}
+${detail ? 'The second reference image is a close-up of the same fabric: match its true color, texture and pattern exactly.' : ''}
 Show only this one garment, front view, neatly shaped as if worn by an invisible ghost mannequin - the mannequin itself must not be visible (shoes, bags and accessories as a clean packshot),
-centered, fully visible, pure white seamless background, soft even studio lighting, crisp edges, wrinkles smoothed, fresh true-to-life colors.
+centered, fully visible, pure white seamless background, soft even studio lighting without overexposure, crisp edges, wrinkles smoothed,
+true-to-life colors exactly as in the references.
 Keep the exact color, fabric, texture, pattern, cut, length and all details (buttons, zips, labels, cuffs, seams) of the reference.
 Do not invent details that are not in the reference. No person, no skin, no mannequin, no hanger, no other clothing, no text.`;
 
@@ -488,9 +551,11 @@ function base64ZuBytes(b64) {
 
 async function produktfotoFlux(env, body) {
   const form = new FormData();
+  const farbe = /^#?[0-9a-f]{6}$/i.test(String(body.farbe || '')) ? '#' + String(body.farbe).replace('#', '') : '';
   form.append('prompt', PROMPT_FLUX(String(body.kategorieEn || body.kategorie || 'garment').slice(0, 60),
-    String(body.beschreibung || '').slice(0, 300)));
+    String(body.beschreibung || '').slice(0, 300), farbe, String(body.muster || '').slice(0, 160), !!body.detail));
   form.append('input_image_0', new Blob([base64ZuBytes(String(body.bild))], { type: 'image/jpeg' }), 'vorlage.jpg');
+  if (body.detail) form.append('input_image_1', new Blob([base64ZuBytes(String(body.detail))], { type: 'image/jpeg' }), 'stoff.jpg');
   form.append('width', '1024');
   form.append('height', '1024');
   const r = new Response(form);
@@ -700,6 +765,13 @@ export default {
       if (url.pathname === '/stylist') {
         const ergebnis = await stylistErzeugen(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
+        return json(ergebnis, env);
+      }
+
+      if (url.pathname === '/shopping') {
+        const ergebnis = await shopping(env, body);
+        if (ergebnis.fehler) return json(ergebnis, env, 400);
+        await zaehleHoch(env);
         return json(ergebnis, env);
       }
 
