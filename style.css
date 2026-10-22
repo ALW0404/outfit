@@ -683,7 +683,8 @@ img[data-pic].laedt{opacity:0;}
 .hlaeuft{position:absolute; inset:0; background:rgba(255,255,255,.55); display:flex; align-items:center; justify-content:center;}
 .hname{font-size:12.5px; font-weight:600; margin:6px 2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .hkat{font-size:11.5px; color:var(--ink-3); margin:0 2px;}
-.hteil .linkbtn{font-size:12.5px; padding:2px 0;}
+.hteil .linkbtn{font-size:12.5px; padding:2px 0; display:flex;}
+.hfehler{font-size:11.5px; color:var(--red); margin:2px 2px 0; line-height:1.3;}
 
 /* Mehrfachauswahl im Schrank */
 #schrank-grid .tile, #schrank-grid .tile img{-webkit-touch-callout:none; -webkit-user-select:none; user-select:none;}

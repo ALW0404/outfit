@@ -3611,6 +3611,24 @@ App.haufenNochmal = async i => {
   if (!t || t.zustand === 'laeuft') return;
   await haufenBildeEins(h, t, true);   /* zweiter Versuch mit dem genaueren Modell */
 };
+/* Kein Produktfoto möglich (etwa Tageskontingent leer): Ausschnitt aus dem
+   eigenen Foto freistellen und so übernehmen */
+App.haufenOhneNachbildung = async i => {
+  const h = UI.haufen; const t = h && h.teile[i];
+  if (!t) return;
+  t.zustand = 'laeuft'; render();
+  try {
+    const frei = await vomWeissLoesen(ausschnittCanvas(h.bild, t.box, 0.04));
+    t.ergebnis = frei; t.ergebnisVorschau = daumen(frei, 300);
+    t.zustand = 'fertig'; t.behalten = true; t.ersatz = true; t.meldung = '';
+  } catch (e) { t.zustand = 'fehler'; t.meldung = 'Auch der Ausschnitt hat nicht geklappt.'; }
+  if (UI.haufen === h) render();
+};
+App.haufenAlleOhne = async () => {
+  const h = UI.haufen; if (!h) return;
+  for (let i = 0; i < h.teile.length; i++) if (h.teile[i].an && h.teile[i].zustand === 'fehler') await App.haufenOhneNachbildung(i);
+};
+
 App.haufenBehalten = i => { const t = UI.haufen && UI.haufen.teile[i]; if (t) { t.behalten = !t.behalten; render(); } };
 
 App.haufenUebernehmen = async () => {
@@ -3629,7 +3647,7 @@ App.haufenUebernehmen = async () => {
       const w = CATS[t.kat].warmth;
       DB.items.push({ id: uid(), picId, colors, cut, ar, cat: t.kat, name: t.name,
         warmth: w, formality: 3, seasons: seasonsFromWarmth(w), seasonsAuto: !h.wunsch,
-        addedAt: Date.now(), nachgebildet: true, beschreibung: t.beschreibung, suchbegriff: t.suchbegriff || '',
+        addedAt: Date.now(), nachgebildet: !t.ersatz, beschreibung: t.beschreibung, suchbegriff: t.suchbegriff || '',
         ...(h.wunsch ? { wunsch: true, pinId: h.pinId || null } : {}) });
       n++;
     } catch (e) { console.warn('Teil nicht gespeichert', e); }
@@ -3662,7 +3680,10 @@ function renderHaufen() {
         ${zeigt === 'an' ? `<span class="hhaken">${ico('check')}</span>` : ''}</div>
       <div class="hname">${esc(t.name || TEIL_NAME[t.kat])}</div>
       <div class="hkat">${esc(CATS[t.kat].label)}${t.verdeckt && !t.ergebnisVorschau ? ' · teils verdeckt' : ''}</div>
-      ${t.zustand === 'fehler' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('again')} Nochmal</button>` : ''}
+      ${t.zustand === 'fehler' ? `<p class="hfehler">${esc(t.meldung || 'Hat nicht geklappt.')}</p>
+        ${/aufgebraucht/.test(t.meldung || '') ? '' : `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('again')} Nochmal</button>`}
+        <button class="linkbtn" onclick="event.stopPropagation(); App.haufenOhneNachbildung(${i})">${ico('image')} Mein Foto nehmen</button>` : ''}
+      ${t.ersatz ? '<div class="hkat">Ausschnitt aus deinem Foto</div>' : ''}
       ${t.zustand === 'fertig' && h.status === 'pruefen' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('dice')} Genauer</button>` : ''}
     </div>`;
   };
@@ -3678,6 +3699,9 @@ function renderHaufen() {
       ${h.ausgeblendet ? `<br><span class="small">${h.ausgeblendet} ${h.ausgeblendet === 1 ? 'weiteres Teil war' : 'weitere Teile waren'} zu weniger als der Hälfte zu sehen und ${h.ausgeblendet === 1 ? 'wird' : 'werden'} nicht angeboten.</span>` : ''}</p>` : ''}
     ${h.status === 'bilden' ? `<p class="hint" style="margin-top:-6px">${fertig} von ${an} fertig – etwa 10 Sekunden je Teil.</p>
       <div class="fortschritt"><i style="width:${Math.round(fertig * 100 / Math.max(1, an))}%"></i></div>` : ''}
+    ${h.status === 'pruefen' && h.teile.some(t => t.an && t.zustand === 'fehler' && /aufgebraucht/.test(t.meldung || '')) ? `<div class="banner" style="margin-bottom:12px" role="button" onclick="App.haufenAlleOhne()">
+      <span class="ico">${ico('image')}</span><span><b>Produktfotos für heute aufgebraucht</b>
+      <span class="small">Tippe hier, um die Teile als Ausschnitt aus deinem Foto zu übernehmen.</span></span>${ico('chev', 'chev')}</div>` : ''}
     ${h.status === 'pruefen' ? `<p class="hint" style="margin-top:-6px">Tippe Bilder an, die du nicht willst. Nicht getroffen?
       <i>Genauer</i> versucht es noch einmal mit dem größeren Modell.</p>` : ''}
     ${h.teile.length && h.status !== 'erkennen' ? `<div class="hgrid">${h.teile.map((t, i) =>
