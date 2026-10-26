@@ -41,6 +41,12 @@ const ICONS = {
   more:    '<path d="M7 17 17 7M9.4 7H17v7.6"/>',
   check:   '<path d="m5 12.8 4.6 4.6L19 7.4"/>',
   plus:    '<path d="M12 5.2v13.6M5.2 12h13.6"/>',
+  wolke:   '<path d="M7 18.5h10.2a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8 1.4A3.1 3.1 0 0 0 7 18.5Z"/>',
+  sonnewolke: '<path d="M9.2 5.2V3.6M4.6 7.1l-1.1-1.1M3.4 11.4H1.8M13.8 6l1.1-1.1"/><path d="M6.6 11.4a3.4 3.4 0 0 1 6.3-1.8"/><path d="M9 20h8.6a3.3 3.3 0 0 0 .4-6.6 4.8 4.8 0 0 0-9.2 1.2A2.7 2.7 0 0 0 9 20Z"/>',
+  regen:   '<path d="M7 15h10.2a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8 1.4A3.1 3.1 0 0 0 7 15Z"/><path d="M8.5 18l-1 2.5M12.5 18l-1 2.5M16.5 18l-1 2.5"/>',
+  schnee:  '<path d="M7 14h10.2a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8 1.4A3.1 3.1 0 0 0 7 14Z"/><path d="M8.5 18.5h.01M12 20h.01M15.5 18.5h.01" stroke-width="2.6"/>',
+  gewitter:'<path d="M7 14h10.2a3.8 3.8 0 0 0 .5-7.6 5.6 5.6 0 0 0-10.8 1.4A3.1 3.1 0 0 0 7 14Z"/><path d="m12.5 15-2 3.5h3l-2 3.5"/>',
+  ort:     '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/>',
   search:  '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4"/>',
   chev:    '<path d="m9 5 7 7-7 7"/>',
   chevdown:'<path d="m6 9 6 6 6-6"/>',
@@ -1467,6 +1473,65 @@ function geraetId() {
 }
 const dienstKopf = () => ({ 'Content-Type': 'application/json', 'X-Geraet': geraetId() });
 
+/* ---- Wetter ----
+   Open-Meteo: frei, ohne Schlüssel. Ort aus der Einstellung, sonst der aktuelle
+   Standort. 30 Minuten zwischengespeichert, damit nicht jedes Neuzeichnen fragt. */
+let _wetter = null, _wetterLaedt = false;
+const LS_WETTER = 'outfit-wetter';
+try { _wetter = JSON.parse(localStorage.getItem(LS_WETTER) || 'null'); } catch (e) {}
+const wetterIcon = c => c === 0 ? 'sun' : c <= 2 ? 'sonnewolke' : c <= 48 ? 'wolke'
+  : (c >= 71 && c <= 77) || c === 85 || c === 86 ? 'schnee' : c >= 95 ? 'gewitter' : 'regen';
+const wetterText = c => c === 0 ? 'Sonnig' : c <= 2 ? 'Heiter' : c === 3 ? 'Bewölkt' : c <= 48 ? 'Nebel'
+  : (c >= 71 && c <= 77) || c === 85 || c === 86 ? 'Schnee' : c >= 95 ? 'Gewitter' : 'Regen';
+
+async function standortErmitteln() {
+  const pos = await new Promise((res, rej) => navigator.geolocation
+    ? navigator.geolocation.getCurrentPosition(res, rej, { timeout: 8000, maximumAge: 3600000 })
+    : rej(new Error('kein GPS')));
+  const lat = +pos.coords.latitude.toFixed(3), lon = +pos.coords.longitude.toFixed(3);
+  let name = 'Hier';
+  try {
+    const r = await (await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=de`)).json();
+    name = r.city || r.locality || r.principalSubdivision || name;
+  } catch (e) {}
+  return { lat, lon, name };
+}
+
+async function wetterLaden(erzwingen) {
+  if (_wetterLaedt) return;
+  const fest = DB.prefs && DB.prefs.ort;
+  if (!erzwingen && _wetter && Date.now() - _wetter.zeit < 30 * 60000 &&
+      (!fest || (_wetter.ort && _wetter.ort.lat === fest.lat && _wetter.ort.lon === fest.lon))) return;
+  _wetterLaedt = true;
+  try {
+    const ort = fest || await standortErmitteln();
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${ort.lat}&longitude=${ort.lon}` +
+      '&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max' +
+      '&timezone=auto&forecast_days=1';
+    const d = await (await fetch(u)).json();
+    _wetter = { zeit: Date.now(), ort, jetzt: Math.round(d.current.temperature_2m), code: d.current.weather_code,
+      min: Math.round(d.daily.temperature_2m_min[0]), max: Math.round(d.daily.temperature_2m_max[0]),
+      regen: d.daily.precipitation_probability_max ? d.daily.precipitation_probability_max[0] : null };
+    try { localStorage.setItem(LS_WETTER, JSON.stringify(_wetter)); } catch (e) {}
+  } catch (e) {
+    console.warn('Wetter:', e);
+    if (!_wetter) _wetter = { fehler: true, zeit: Date.now() };
+  } finally {
+    _wetterLaedt = false;
+    if (UI.tab === 'today' && !UI.builder && !UI.sorting) { const el = $('#wetter'); if (el) el.outerHTML = wetterHTML(); }
+  }
+}
+
+function wetterHTML() {
+  const w = _wetter;
+  if (!w || w.fehler || w.jetzt == null) return `<button class="wetter" id="wetter" onclick="App.aktion('ort')">${ico('ort')}
+    <span class="wleise">${w && w.fehler ? 'Wetter: Ort wählen' : 'Wetter wird geladen …'}</span></button>`;
+  return `<button class="wetter" id="wetter" onclick="App.aktion('ort')" aria-label="Wetter, Ort ändern">
+    ${ico(wetterIcon(w.code))}<b>${w.jetzt}°</b>
+    <span class="wleise">${w.min}° / ${w.max}°${w.regen != null && w.regen >= 30 ? ` · ${w.regen} % Regen` : ''}</span>
+    <span class="word">${esc(w.ort.name)}${DB.prefs && DB.prefs.ort ? '' : ` ${ico('ort')}`}</span></button>`;
+}
+
 /* ---- Damen oder Herren ----
    Je Person einstellbar: steuert Kategorien (Hemden statt Blusen, kein Rock und
    kein Kleid), Shop-Links und den Hinweis an die KI. */
@@ -1999,7 +2064,9 @@ function renderToday() {
   const saisonLbl = esc(SEASONS.find(x => x.key === UI.season).label);
   const saison = SEASONS.find(x => x.key === UI.season);
   /* Kein großer Titel: auf Heute ist das Outfit der Star, jeder Pixel geht an die Karte */
-  return `<div class="heute-kopf">
+  setTimeout(() => wetterLaden(), 0);
+  return `${wetterHTML()}
+  <div class="heute-kopf">
     ${segHTML('anlass', moods, UI.mood, 'App.setMood')}
     <button class="kopfknopf" onclick="App.aktion('saison')">${ico(saison.ico)} ${esc(saison.label)} ${ico('chevdown', 'pfeil')}</button>
   </div>
@@ -2553,7 +2620,8 @@ function studioTeilHTML(s, laedt) {
     Bilde ${esc(s.teilName || TEIL_NAME[s.teilKat] || 'das Teil')} als Produktfoto nach …</p></div>`;
   if (s.nachgebildet) return `<div class="studio-teil">
     <div class="btn-row">
-      <button class="btn small" onclick="App.studioNachbilden()">${ico('dice')} Genauer neu erzeugen</button>
+      <button class="btn small" onclick="App.studioNachbilden()">${ico('dice')} Nochmal</button>
+      <button class="btn small" onclick="App.studioNachbilden(true)" title="verbraucht etwa 14-mal so viel">${ico('sparkle')} Genauer</button>
       <button class="btn small" onclick="App.studioOriginal()">${ico('again')} Mein Foto verwenden</button>
     </div></div>`;
   const nachbilden = _dienst && _dienst.produktfoto;
@@ -2663,7 +2731,10 @@ function zielFarbe(cv, box, hex) {
   if (!m) return h;
   if (!h) return m;
   const dE = Math.hypot(m[0] - h[0], m[1] - h[1], m[2] - h[2]);
-  return dE > 28 ? h : m;
+  if (dE > 28) return h;
+  /* Mittel aus Messung und Einschätzung bei Tageslicht – die Messung allein trägt
+     den Farbstich des Raumlichts mit (ein grauweißes Shirt wurde so braun) */
+  return [(m[0] + h[0]) / 2, (m[1] + h[1]) / 2, (m[2] + h[2]) / 2];
 }
 
 function farbAngleich(cv, ziel, staerkeL = 0.65, staerkeC = 0.85) {
@@ -2678,7 +2749,13 @@ function farbAngleich(cv, ziel, staerkeL = 0.65, staerkeC = 0.85) {
     L.push(l); A.push(a); B.push(b);
   }
   if (L.length < 50) return cv;
-  const dL = (ziel[0] - median(L)) * staerkeL, da = (ziel[1] - median(A)) * staerkeC, db = (ziel[2] - median(B)) * staerkeC;
+  /* Begrenzt schieben: nahezu unbunte Teile (Weiß, Grau, Schwarz) nur in der
+     Helligkeit, nie in einen Farbton; alles andere höchstens ein Stück weit */
+  const zielBunt = Math.hypot(ziel[1], ziel[2]);
+  const kappe = (v, m) => clamp(v, -m, m);
+  const dL = kappe((ziel[0] - median(L)) * staerkeL, 10);
+  const da = zielBunt < 8 ? 0 : kappe((ziel[1] - median(A)) * staerkeC, 7);
+  const db = zielBunt < 8 ? 0 : kappe((ziel[2] - median(B)) * staerkeC, 7);
   if (Math.abs(dL) < 1.5 && Math.abs(da) < 1.5 && Math.abs(db) < 1.5) return cv;
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] === 0) continue;
@@ -2781,6 +2858,20 @@ function renderModal() {
         `<button onclick="App.tossMit('${k}')">${ico(GRUND_ICO[k] || 'x')}${esc(l)}</button>`).join('')}
         <button class="leise" onclick="App.tossMit('')">${ico('minus')}Keine Angabe</button>
       </div>
+    </div></div>`;
+  }
+  if (UI.modal === 'ort') {
+    const fest = DB.prefs && DB.prefs.ort;
+    return `<div class="overlay" onclick="App.aktionZu()"><div class="sheet kurz" onclick="event.stopPropagation()">
+      ${blattKopf('Wetter-Ort', 'App.aktionZu()')}
+      <div class="liste">
+        <button class="zeile-l" onclick="App.ortWaehlen(null)"><span class="lico ${fest ? 'hell' : 'akzent'}">${ico('ort')}</span>
+          <span class="ltext">Aktueller Standort</span>${fest ? '' : ico('check', 'chev')}</button>
+        ${fest ? `<div class="zeile-l"><span class="lico akzent">${ico('check')}</span><span class="ltext">${esc(fest.name)}</span></div>` : ''}
+      </div>
+      <div class="suche" style="margin-top:12px">${ico('search')}<input type="search" id="ortsuche" placeholder="Stadt suchen"
+        oninput="App.ortSuche(this.value)" enterkeyhint="search"></div>
+      <div class="liste" id="orttreffer"></div>
     </div></div>`;
   }
   if (UI.modal === 'saison') {
@@ -3209,6 +3300,31 @@ App.auswahlTeilen = async () => {
 };
 
 App.setAbteilung = setAbteilung;
+let _ortZeit = null;
+App.ortSuche = q => {
+  clearTimeout(_ortZeit);
+  _ortZeit = setTimeout(async () => {
+    const el = $('#orttreffer');
+    if (!el || q.trim().length < 2) { if (el) el.innerHTML = ''; return; }
+    try {
+      const d = await (await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q.trim())}&count=6&language=de`)).json();
+      App._orte = d.results || [];
+      el.innerHTML = App._orte.map((o, i) => `<button class="zeile-l ohne-ico" onclick="App.ortWaehlen(${i})">
+        <span class="ltext">${esc(o.name)}<small>${esc([o.admin1, o.country].filter(Boolean).join(', '))}</small></span></button>`).join('')
+        || '<div class="zeile-l ohne-ico"><span class="ltext small">Nichts gefunden.</span></div>';
+    } catch (e) { el.innerHTML = ''; }
+  }, 300);
+};
+App.ortWaehlen = i => {
+  DB.prefs = DB.prefs || {};
+  if (i === null) delete DB.prefs.ort;
+  else { const o = App._orte[i]; DB.prefs.ort = { name: o.name, lat: +o.latitude.toFixed(3), lon: +o.longitude.toFixed(3) }; }
+  save();
+  _wetter = null;
+  UI.modal = null; render();
+  wetterLaden(true);
+};
+
 App.teilAusOutfit = id => { UI.detail = null; App.editItem(id); };
 App.stylistNeu = () => stylistHolen(true);
 /* Wer nicht warten will, bekommt sofort die lokale Auswahl; die Ergebnisse
@@ -3477,14 +3593,15 @@ App.studioTeil = async kat => {
 
 /* Nachbilden: aus dem Alltagsfoto ein Produktfoto erzeugen lassen. Bewusst eine
    eigene Aktion – das Ergebnis ist eine Nachbildung, nicht mehr dein Foto. */
-App.studioNachbilden = async () => {
+App.studioNachbilden = async fein => {
   const s = UI.studio;
   if (!s) return;
+  s.feinWunsch = fein === true;
   if (!s.teilKat) { toast('Tippe zuerst an, welches Teil es ist.'); return; }
   s.bildLaedt = true; render();
   try {
     const quelle = s.original || s.gross;
-    const neu = await nachbilden(quelle, s.box, s.teilKat, s.beschreibung, s.nachgebildet ? 'fein' : 'schnell',
+    const neu = await nachbilden(quelle, s.box, s.teilKat, s.beschreibung, s.feinWunsch ? 'fein' : 'schnell',
       { farbe: s.farbe, muster: s.muster });
     if (UI.studio !== s) return;
     s.zielFarbe = s.zielFarbe || zielFarbe(quelle, s.box, s.farbe);
@@ -3606,10 +3723,11 @@ App.haufenBilden = async () => {
   }
   if (UI.haufen === h) { h.status = 'pruefen'; render(); }
 };
-App.haufenNochmal = async i => {
+/* Nochmal = günstiges Modell mit neuem Zufall; Genauer = großes Modell, ~14-mal teurer */
+App.haufenNochmal = async (i, fein) => {
   const h = UI.haufen; const t = h && h.teile[i];
   if (!t || t.zustand === 'laeuft') return;
-  await haufenBildeEins(h, t, true);   /* zweiter Versuch mit dem genaueren Modell */
+  await haufenBildeEins(h, t, !!fein);
 };
 /* Kein Produktfoto möglich (etwa Tageskontingent leer): Ausschnitt aus dem
    eigenen Foto freistellen und so übernehmen */
@@ -3684,7 +3802,8 @@ function renderHaufen() {
         ${/aufgebraucht/.test(t.meldung || '') ? '' : `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('again')} Nochmal</button>`}
         <button class="linkbtn" onclick="event.stopPropagation(); App.haufenOhneNachbildung(${i})">${ico('image')} Mein Foto nehmen</button>` : ''}
       ${t.ersatz ? '<div class="hkat">Ausschnitt aus deinem Foto</div>' : ''}
-      ${t.zustand === 'fertig' && h.status === 'pruefen' ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('dice')} Genauer</button>` : ''}
+      ${t.zustand === 'fertig' && h.status === 'pruefen' && !t.ersatz ? `<button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i})">${ico('dice')} Nochmal</button>
+        <button class="linkbtn" onclick="event.stopPropagation(); App.haufenNochmal(${i}, true)">${ico('sparkle')} Genauer</button>` : ''}
     </div>`;
   };
   return `<div class="overlay" onclick="App.haufenZu()"><div class="sheet" onclick="event.stopPropagation()">
@@ -3703,7 +3822,7 @@ function renderHaufen() {
       <span class="ico">${ico('image')}</span><span><b>Produktfotos für heute aufgebraucht</b>
       <span class="small">Tippe hier, um die Teile als Ausschnitt aus deinem Foto zu übernehmen.</span></span>${ico('chev', 'chev')}</div>` : ''}
     ${h.status === 'pruefen' ? `<p class="hint" style="margin-top:-6px">Tippe Bilder an, die du nicht willst. Nicht getroffen?
-      <i>Genauer</i> versucht es noch einmal mit dem größeren Modell.</p>` : ''}
+      <i>Nochmal</i> versucht es neu, <i>Genauer</i> nimmt das große Modell – das verbraucht etwa 14-mal so viel vom Tageskontingent.</p>` : ''}
     ${h.teile.length && h.status !== 'erkennen' ? `<div class="hgrid">${h.teile.map((t, i) =>
       h.status === 'auswahl' || t.an ? karte(t, i) : '').join('')}</div>` : ''}
     <div class="sheet-fuss">

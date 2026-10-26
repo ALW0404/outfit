@@ -379,12 +379,19 @@ img[data-pic].laedt{opacity:0;}
 }
 
 /* ---------- Heute ---------- */
+.wetter{display:flex; align-items:center; gap:6px; border:0; background:none; padding:0 2px; margin:0 0 8px;
+  font-size:14px; color:var(--ink); height:22px; max-width:100%; white-space:nowrap; overflow:hidden;}
+.wetter .i{width:18px; height:18px; flex:none;}
+.wetter b{font-weight:650;}
+.wetter .wleise{color:var(--ink-2);}
+.wetter .word{color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; display:inline-flex; align-items:center; gap:3px;}
+.wetter .word .i{width:12px; height:12px;}
 .heute-kopf{display:flex; gap:8px; align-items:center; margin:0 0 14px;}
 .heute-kopf .seg{flex:1; margin:0;}
 .heute-kopf .seg button{font-size:13.5px; padding:0 2px;}
 .heute-kopf .kopfknopf{height:42px; padding:0 12px 0 11px; flex:none;}
 .stapel{position:relative; margin:0 auto 22px;
-  width:min(100%, calc(20px + max(210px, (100svh - var(--rest, 400px) - var(--top) - var(--bottom)) * 0.8)));}
+  width:min(100%, calc(20px + max(210px, (100svh - var(--rest, 430px) - var(--top) - var(--bottom)) * 0.8)));}
 .swipe-card{
   position:relative; z-index:2;
   background:var(--surface); border-radius:30px; padding:10px 10px 14px;

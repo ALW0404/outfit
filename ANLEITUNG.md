@@ -35,6 +35,10 @@ Bildschirm passen – die Collage wird dafür bei Bedarf kleiner. Gewischt wird 
 Verworfene Kombinationen lassen sich zurückholen: wenn keine Vorschläge mehr übrig sind, erscheint
 *Verworfene wieder zulassen*.
 
+**Wetter.** Oben auf *Heute* eine Zeile: jetzt, Tiefst-/Höchstwert, Regenwahrscheinlichkeit ab 30 %,
+Ort. Antippen → aktueller Standort oder Stadt suchen. Daten von Open-Meteo (für die private Nutzung
+kostenlos; für den App-Store-Launch ist dort ein kommerzieller Tarif nötig).
+
 **Anlass Sport** zeigt nur Sportbekleidung und Sneaker – und Sportbekleidung taucht umgekehrt in
 keinem anderen Anlass auf. Erkannt wird sie am Namen (Sport, Yoga, Pilates, Leggings …) oder an der
 KI-Analyse; im Teil lässt sich das über den Knopf *Sportbekleidung* von Hand festlegen.

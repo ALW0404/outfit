@@ -430,7 +430,8 @@ const SCHEMA_UMRISS = {
 const BESCHREIBUNG_HINWEIS = `name: kurzer deutscher Name wie im Shop, Art + Farbe, etwa "Ballonrock Schwarz" oder "Leinenhose Beige mit Nadelstreifen".
 beschreibung: auf Englisch, 25–45 Wörter, nur Sichtbares: exakte Farbe mit Unterton (z. B. "warm sand beige with light
 brown undertone", nicht einfach "beige" oder "white"), Material und Oberfläche, Schnitt und Passform, Länge, Bund, Kragen,
-Ärmel, Verschlüsse, Taschen, Säume, besondere Details.
+Ärmel, Verschlüsse, Taschen, Säume, besondere Details – und Logos, Aufnäher oder Schriftzüge mit genauem Wortlaut,
+Farbe und Position (z. B. "white Patagonia logo patch on left chest").
 farbe_hex: die tatsächliche Hauptfarbe des Stoffs als Hex-Wert, wie sie bei neutralem Tageslicht aussähe – nicht
 heller oder weißer als im Foto.
 muster: auf Englisch, genau: Art (solid, pinstripe, check, gingham, herringbone, floral, leopard …), Farben des Musters,
@@ -572,7 +573,8 @@ Show only this one garment, front view, neatly shaped as if worn by an invisible
 centered, fully visible, pure white seamless background, soft even studio lighting without overexposure, crisp edges, wrinkles smoothed,
 true-to-life colors exactly as in the references.
 Keep the exact color, fabric, texture, pattern, cut, length and all details (buttons, zips, labels, cuffs, seams) of the reference.
-Do not invent details that are not in the reference. No person, no skin, no mannequin, no hanger, no other clothing, no text.`;
+Keep brand logos, patches, prints and lettering (e.g. a brand name on the chest) exactly as in the reference.
+Do not invent details that are not in the reference and add no other text. No person, no skin, no mannequin, no hanger, no other clothing.`;
 
 function base64ZuBytes(b64) {
   const bin = atob(b64);
@@ -588,8 +590,12 @@ async function produktfotoFlux(env, body) {
     String(body.beschreibung || '').slice(0, 300), farbe, String(body.muster || '').slice(0, 160), !!body.detail));
   form.append('input_image_0', new Blob([base64ZuBytes(String(body.bild))], { type: 'image/jpeg' }), 'vorlage.jpg');
   if (body.detail) form.append('input_image_1', new Blob([base64ZuBytes(String(body.detail))], { type: 'image/jpeg' }), 'stoff.jpg');
-  form.append('width', '1024');
-  form.append('height', '1024');
+  /* 768 statt 1024: kaum sichtbarer Unterschied in der App, aber gut 40 % weniger
+     Rechenkosten beim schnellen Modell – das Kontingent reicht länger */
+  const gross = body.qualitaet === 'fein' ? '1024' : '768';
+  form.append('width', gross);
+  form.append('height', gross);
+  form.append('seed', String(Math.floor(Math.random() * 2 ** 31)));
   const r = new Response(form);
   const modell = FLUX_MODELLE[body.qualitaet] || FLUX_MODELLE.schnell;
   const aus = await env.AI.run(modell, { multipart: { body: r.body, contentType: r.headers.get('content-type') } });
