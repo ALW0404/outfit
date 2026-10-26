@@ -2926,7 +2926,18 @@ function renderModal() {
   const worlds = itemWorlds(d);
   return `<div class="overlay" onclick="App.cancelItem()"><div class="sheet" onclick="event.stopPropagation()">
     ${blattKopf(isNew ? 'Neues Teil' : 'Bearbeiten', 'App.cancelItem()')}
-    <div class="checker"><img data-pic="${d.picId}" alt=""></div>
+    <div class="checker"><img data-pic="${d.picId}" alt="" id="teilbild" style="${farbFilterCss(d.anpassung)}"></div>
+    <div class="nacharbeit">
+      <button class="chip mini ${UI.anpassen ? 'active' : ''}" onclick="App.anpassenAuf()">${ico('palette')} Farbe anpassen</button>
+      ${d.vorlagePicId && dienstUrl() ? `<button class="chip mini" onclick="App.teilNeuErzeugen()" ${UI.teilErzeugt ? 'disabled' : ''}>${UI.teilErzeugt ? '<span class="spin mini"></span> Wird erzeugt …' : `${ico('dice')} Produktfoto neu erzeugen`}</button>
+      <button class="chip mini" onclick="App.teilNeuErzeugen(true)" ${UI.teilErzeugt ? 'disabled' : ''}>${ico('sparkle')} Genauer</button>` : ''}
+    </div>
+    ${UI.anpassen ? `<div class="card kompakt" style="margin:8px 0 0">
+      <label class="fld">Helligkeit<div class="slider-row"><input type="range" min="-40" max="40" step="1" value="${(d.anpassung || {}).hell || 0}" oninput="App.anpassen('hell', +this.value)"><span class="val" data-out="hell">${(d.anpassung || {}).hell || 0}</span></div></label>
+      <label class="fld">Farbigkeit<div class="slider-row"><input type="range" min="-100" max="60" step="1" value="${(d.anpassung || {}).farbig || 0}" oninput="App.anpassen('farbig', +this.value)"><span class="val" data-out="farbig">${(d.anpassung || {}).farbig || 0}</span></div></label>
+      <label class="fld">Wärme<div class="slider-row"><input type="range" min="-30" max="30" step="1" value="${(d.anpassung || {}).warm || 0}" oninput="App.anpassen('warm', +this.value)"><span class="val" data-out="warm">${(d.anpassung || {}).warm || 0}</span></div></label>
+      <p class="small" style="margin:0">Braunstich weg: Farbigkeit nach links. Wird beim Speichern übernommen.</p>
+    </div>` : ''}
     ${d.nachgebildet ? `<p class="small center" style="margin:8px 0 0">${ico('sparkle')} Von der KI als Produktfoto nachgebildet</p>` : ''}
     ${d.wunsch ? `<div class="banner" style="margin:12px 0 0" role="button" onclick="App.wunschGekauft()">
       <span class="ico">${ico('heart')}</span><span><b>Auf deiner Wunschliste</b>
@@ -3323,6 +3334,61 @@ App.ortWaehlen = i => {
   _wetter = null;
   UI.modal = null; render();
   wetterLaden(true);
+};
+
+/* ---- Nacharbeit im Teil ---- */
+const farbFilterCss = a => !a ? '' : `filter: brightness(${1 + (a.hell || 0) / 100}) saturate(${1 + (a.farbig || 0) / 100}) sepia(${Math.max(0, a.warm || 0) / 100}) hue-rotate(${Math.min(0, a.warm || 0) * 0.6}deg)`;
+App.anpassenAuf = () => { UI.anpassen = !UI.anpassen; render(); };
+App.anpassen = (k, v) => {
+  const d = UI.draft; if (!d) return;
+  d.anpassung = { ...(d.anpassung || {}), [k]: v };
+  const el = $('#teilbild'); if (el) el.style.cssText = farbFilterCss(d.anpassung);
+  const o = document.querySelector(`#modal-root .val[data-out="${k}"]`); if (o) o.textContent = v;
+};
+/* Anpassung ins Bild einrechnen: Helligkeit, Sättigung über Luma, Wärme über Rot/Blau */
+async function anpassungAnwenden(d) {
+  const a = d.anpassung;
+  if (!a || (!a.hell && !a.farbig && !a.warm)) return;
+  const blob = await picGet(d.picId);
+  const img = await loadImg(URL.createObjectURL(blob));
+  const cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height;
+  const ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0);
+  const id = ctx.getImageData(0, 0, cv.width, cv.height), p = id.data;
+  const hell = 1 + (a.hell || 0) / 100, satt = 1 + (a.farbig || 0) / 100, warm = (a.warm || 0) * 0.8;
+  for (let i = 0; i < p.length; i += 4) {
+    if (!p[i + 3]) continue;
+    let r = p[i] * hell, g = p[i + 1] * hell, b = p[i + 2] * hell;
+    const y = 0.299 * r + 0.587 * g + 0.114 * b;
+    r = y + (r - y) * satt; g = y + (g - y) * satt; b = y + (b - y) * satt;
+    p[i] = clamp(r + warm, 0, 255); p[i + 1] = clamp(g, 0, 255); p[i + 2] = clamp(b - warm, 0, 255);
+  }
+  ctx.putImageData(id, 0, 0);
+  const alt = d.picId;
+  d.picId = uid();
+  await picPut(d.picId, await encode(cv, true));
+  d.colors = extractColors(ctx, cv.width, cv.height);
+  delete d.anpassung;
+  if (!DB.items.some(i => i.picId === alt)) { dropPicURL(alt); picDel(alt).catch(() => {}); }
+}
+
+/* Produktfoto aus der gespeicherten Vorlage neu erzeugen */
+App.teilNeuErzeugen = async fein => {
+  const d = UI.draft;
+  if (!d || !d.vorlagePicId) return;
+  UI.teilErzeugt = true; render();
+  try {
+    const img = await loadImg(URL.createObjectURL(await picGet(d.vorlagePicId)));
+    const vorlage = canvasFrom(img, 1024);
+    const neu = await nachbilden(vorlage, null, d.cat, d.beschreibung || d.name || '', fein ? 'fein' : 'schnell',
+      { farbe: d.farbe, muster: d.muster });
+    const frei = farbAngleich(await vomWeissLoesen(neu), hexLab(d.farbe));
+    const { blob, colors, ar } = await prepItemImage(await encode(frei, true), 900, true);
+    d.picId = uid(); d.colors = colors; d.ar = ar; d.cut = true; delete d.anpassung;
+    await picPut(d.picId, blob);
+    toast('Neues Produktfoto – Speichern übernimmt es');
+  } catch (e) { toast(bildFehler(e)); }
+  UI.teilErzeugt = false;
+  if (UI.draft === d) render();
 };
 
 App.teilAusOutfit = id => { UI.detail = null; App.editItem(id); };
@@ -3762,8 +3828,12 @@ App.haufenUebernehmen = async () => {
       const { blob: out, colors, cut, ar } = await prepItemImage(blob, 900, true);
       const picId = uid();
       await picPut(picId, out);
+      /* Ausschnitt aus dem Originalfoto behalten – damit lässt sich das Produktfoto
+         später neu erzeugen, auch wenn das Foto selbst längst weg ist */
+      const vorlagePicId = uid();
+      await picPut(vorlagePicId, await canvasToBlob(aufMass(ausschnittCanvas(h.bild, t.box, 0.05), 320, 640), 'image/jpeg', 0.85));
       const w = CATS[t.kat].warmth;
-      DB.items.push({ id: uid(), picId, colors, cut, ar, cat: t.kat, name: t.name,
+      DB.items.push({ id: uid(), picId, vorlagePicId, farbe: t.farbe || '', muster: t.muster || '', colors, cut, ar, cat: t.kat, name: t.name,
         warmth: w, formality: 3, seasons: seasonsFromWarmth(w), seasonsAuto: !h.wunsch,
         addedAt: Date.now(), nachgebildet: !t.ersatz, beschreibung: t.beschreibung, suchbegriff: t.suchbegriff || '',
         ...(h.wunsch ? { wunsch: true, pinId: h.pinId || null } : {}) });
@@ -3868,7 +3938,12 @@ App.studioCommit = async () => {
     if (UI.draft && s.teilKat) App.draftSet('cat', s.teilKat, true);
     if (UI.draft && s.teilName && !UI.draft.name) UI.draft.name = s.teilName;
     if (UI.draft && s.suchbegriff) UI.draft.suchbegriff = s.suchbegriff;
-    if (UI.draft && s.nachgebildet) UI.draft.nachgebildet = true;
+    if (UI.draft && s.nachgebildet) {
+      UI.draft.nachgebildet = true;
+      const vorlagePicId = uid();
+      await picPut(vorlagePicId, await canvasToBlob(aufMass(ausschnittCanvas(s.original || s.gross, s.box, 0.05), 320, 640), 'image/jpeg', 0.85));
+      Object.assign(UI.draft, { vorlagePicId, farbe: s.farbe || '', muster: s.muster || '', beschreibung: s.beschreibung || '' });
+    }
     render();
   } catch (e) {
     console.error(e);
@@ -3970,10 +4045,12 @@ App.draftSlide = (path, val) => {
   const out = document.querySelector(`#modal-root .val[data-out="${path}"]`);
   if (out) out.textContent = path === 'warmth' ? WARMTH_LBL[val] : FORMAL_LBL[val];
 };
-App.saveItem = () => {
+App.saveItem = async () => {
   const d = UI.draft;
   if (!d) return;
   delete d._newPic;
+  UI.anpassen = false;
+  try { await anpassungAnwenden(d); } catch (e) { console.warn('Farbanpassung', e); }
   if (!d.seasons || !d.seasons.length) d.seasons = seasonsFromWarmth(d.warmth);
   const ex = DB.items.findIndex(i => i.id === d.id);
   if (ex >= 0) DB.items[ex] = d; else DB.items.push(d);
@@ -3984,7 +4061,7 @@ App.saveItem = () => {
 };
 App.cancelItem = async () => {
   const d = UI.draft;
-  UI.modal = null; UI.draft = null;
+  UI.modal = null; UI.draft = null; UI.anpassen = false;
   if (d && d._newPic) { dropPicURL(d.picId); await picDel(d.picId); }
   render();
 };
@@ -4237,7 +4314,7 @@ App.profilLoeschen = () => {
 };
 
 /* --- Daten --- */
-const allPicIds = () => DB.items.map(i => i.picId)
+const allPicIds = () => DB.items.flatMap(i => [i.picId, i.vorlagePicId])
   .concat(DB.trends.map(t => t.picId)).filter(Boolean);
 
 App.exportData = async withPics => {
