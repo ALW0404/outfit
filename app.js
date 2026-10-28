@@ -1587,6 +1587,24 @@ async function kiAnalyse(item) {
 
 /* Der Worker schickt den Grund im Feld "fehler" mit. Den einfach wegzuwerfen
    und nur den Statuscode zu zeigen macht jede Fehlersuche unmöglich. */
+/* KI-Abfrage mit zwei stillen Wiederholungen. Google ist zeitweise überlastet –
+   ein einzelner Aussetzer soll nie zur Fehlermeldung werden. Kontingent-Ende
+   (429) wird nicht wiederholt. */
+async function dienstAnfrage(pfad, daten, versuche = 3) {
+  let letzter;
+  for (let i = 0; i < versuche; i++) {
+    try {
+      const res = await fetch(dienstUrl() + pfad, { method: 'POST', headers: dienstKopf(), body: JSON.stringify(daten) });
+      return await antwortLesen(res);
+    } catch (e) {
+      letzter = e;
+      if (/429|aufgebraucht|Kontingent|nicht freigegeben/i.test(String(e.message))) break;
+      if (i < versuche - 1) await new Promise(r => setTimeout(r, 1500 * (i + 1)));
+    }
+  }
+  throw letzter;
+}
+
 async function antwortLesen(res) {
   if (res.ok) return res.json();
   let grund = '';
@@ -2788,13 +2806,9 @@ async function nachbilden(cv, box, kat, beschreibung, qualitaet, extra = {}) {
     box[2] - (box[2] - box[0]) * 0.32, box[3] - (box[3] - box[1]) * 0.32] : null;
   const kernCv = kern ? ausschnittCanvas(cv, kern, 0) : null;
   const detail = kernCv && Math.min(kernCv.width, kernCv.height) >= 48 ? await studioBild64(aufMass(kernCv, 256), 512) : '';
-  const res = await fetch(dienstUrl() + '/produktfoto', {
-    method: 'POST', headers: dienstKopf(),
-    body: JSON.stringify({ bild, detail, kategorie: TEIL_NAME[kat], kategorieEn: KAT_EN[kat],
-      beschreibung: beschreibung || '', farbe: extra.farbe || '', muster: extra.muster || '',
-      qualitaet: qualitaet || 'schnell' })
-  });
-  const j = await antwortLesen(res);
+  const j = await dienstAnfrage('/produktfoto', { bild, detail, kategorie: TEIL_NAME[kat], kategorieEn: KAT_EN[kat],
+    beschreibung: beschreibung || '', farbe: extra.farbe || '', muster: extra.muster || '',
+    qualitaet: qualitaet || 'schnell' }, 2);
   const img = await loadImg(`data:${j.mime || 'image/jpeg'};base64,${j.bild}`);
   return canvasFrom(img, STUDIO_WORK);
 }
@@ -3631,13 +3645,18 @@ App.studioTeil = async kat => {
   s.teilLaedt = kat; render();
   try {
     const bild = await studioBild64(s.original || s.gross);
-    const res = await fetch(dienstUrl() + '/umriss', {
-      method: 'POST', headers: dienstKopf(),
-      body: JSON.stringify({ bild, kategorie: TEIL_NAME[kat] })
-    });
-    const j = await antwortLesen(res);
+    let j;
+    try { j = await dienstAnfrage('/umriss', { bild, kategorie: TEIL_NAME[kat] }); }
+    catch (e) {
+      /* Erkennung fällt aus: trotzdem weitermachen – mit dem ganzen Bild als Vorlage */
+      if (/429|aufgebraucht/i.test(String(e.message)) || !(_dienst && _dienst.produktfoto)) throw e;
+      j = { gefunden: true, umriss: null, name: '', beschreibung: '', box_2d: null };
+    }
     if (UI.studio !== s) return;
-    if (!j.gefunden || !Array.isArray(j.umriss) || j.umriss.length < 3) {
+    if (j.gefunden && !j.umriss) {
+      s.teilKat = kat; s.box = null; s.teilName = ''; s.beschreibung = '';
+      if (_dienst && _dienst.produktfoto) { s.teilLaedt = null; App.studioNachbilden(); return; }
+    } else if (!j.gefunden || !Array.isArray(j.umriss) || j.umriss.length < 3) {
       toast(`Kein ${TEIL_NAME[kat] === 'Schuhe' ? 'Paar Schuhe' : TEIL_NAME[kat]} im Bild gefunden.`);
     } else {
       s.umriss = j.umriss; s.teilKat = kat; s.zeigeVorher = false;
@@ -3725,11 +3744,7 @@ async function openHaufen(file, wunsch, getragen) {
     const bild = canvasFrom(img, 2000);
     UI.haufen = { bild, foto: daumen(bild, 700), status: 'erkennen', teile: [], wunsch: !!wunsch };
     UI.modal = 'haufen'; render();
-    const res = await fetch(dienstUrl() + '/haufen', {
-      method: 'POST', headers: dienstKopf(),
-      body: JSON.stringify({ bild: await studioBild64(bild, 1280), getragen: !!(wunsch || getragen), abteilung: abteilung() })
-    });
-    const j = await antwortLesen(res);
+    const j = await dienstAnfrage('/haufen', { bild: await studioBild64(bild, 1280), getragen: !!(wunsch || getragen), abteilung: abteilung() });
     const h = UI.haufen;
     if (!h) return;
     /* Zu stark verdeckte Teile gar nicht erst anbieten – die Rekonstruktion

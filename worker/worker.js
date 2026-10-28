@@ -872,6 +872,15 @@ export default {
 
       return json({ fehler: 'Unbekannter Endpunkt' }, env, 404);
     } catch (e) {
+      /* Fehlerprotokoll: die letzten 30 Fehler mit Zeit und Endpunkt, damit sich
+         ein Ausfall auf dem Handy nachträglich nachvollziehen lässt */
+      if (env.ZAEHLER) {
+        try {
+          const log = (await env.ZAEHLER.get('fehlerlog', 'json')) || [];
+          log.unshift({ zeit: new Date().toISOString(), pfad: url.pathname, geraet: geraet.slice(0, 6), fehler: String(e.message || e).slice(0, 300) });
+          await env.ZAEHLER.put('fehlerlog', JSON.stringify(log.slice(0, 30)));
+        } catch {}
+      }
       return json({ fehler: String(e.message || e) }, env, 502);
     }
   }
