@@ -584,25 +584,41 @@ function base64ZuBytes(b64) {
 }
 
 async function produktfotoFlux(env, body) {
-  const form = new FormData();
   const farbe = /^#?[0-9a-f]{6}$/i.test(String(body.farbe || '')) ? '#' + String(body.farbe).replace('#', '') : '';
-  form.append('prompt', PROMPT_FLUX(String(body.kategorieEn || body.kategorie || 'garment').slice(0, 60),
-    String(body.beschreibung || '').slice(0, 300), farbe, String(body.muster || '').slice(0, 160), !!body.detail));
-  form.append('input_image_0', new Blob([base64ZuBytes(String(body.bild))], { type: 'image/jpeg' }), 'vorlage.jpg');
-  if (body.detail) form.append('input_image_1', new Blob([base64ZuBytes(String(body.detail))], { type: 'image/jpeg' }), 'stoff.jpg');
-  /* 768 statt 1024: kaum sichtbarer Unterschied in der App, aber gut 40 % weniger
-     Rechenkosten beim schnellen Modell – das Kontingent reicht länger */
-  const gross = body.qualitaet === 'fein' ? '1024' : '768';
-  form.append('width', gross);
-  form.append('height', gross);
-  form.append('seed', String(Math.floor(Math.random() * 2 ** 31)));
-  const r = new Response(form);
-  const modell = FLUX_MODELLE[body.qualitaet] || FLUX_MODELLE.schnell;
-  const aus = await env.AI.run(modell, { multipart: { body: r.body, contentType: r.headers.get('content-type') } });
-  if (!aus || !aus.image) throw new Error('FLUX lieferte kein Bild');
-  const kopf = aus.image.slice(0, 8);
-  const mime = kopf.startsWith('iVBOR') ? 'image/png' : kopf.startsWith('UklG') ? 'image/webp' : 'image/jpeg';
-  return { bild: aus.image, mime, modell };
+  /* Formular je Versuch neu bauen – ein Datenstrom lässt sich nur einmal senden */
+  const formular = gross => {
+    const form = new FormData();
+    form.append('prompt', PROMPT_FLUX(String(body.kategorieEn || body.kategorie || 'garment').slice(0, 60),
+      String(body.beschreibung || '').slice(0, 300), farbe, String(body.muster || '').slice(0, 160), !!body.detail));
+    form.append('input_image_0', new Blob([base64ZuBytes(String(body.bild))], { type: 'image/jpeg' }), 'vorlage.jpg');
+    if (body.detail) form.append('input_image_1', new Blob([base64ZuBytes(String(body.detail))], { type: 'image/jpeg' }), 'stoff.jpg');
+    form.append('width', gross); form.append('height', gross);
+    form.append('seed', String(Math.floor(Math.random() * 2 ** 31)));
+    return new Response(form);
+  };
+  /* 768 statt 1024 beim schnellen Modell: kaum sichtbar, gut 40 % weniger Verbrauch.
+     Antwortet ein Modell nicht binnen 35 s (Cloudflare meldete „3046 Request timeout"
+     und hielt die App minutenlang hin), kommt ein zweiter Versuch, dann das andere Modell. */
+  const plan = body.qualitaet === 'fein' ? [['fein', '1024']] : [['schnell', '768'], ['schnell', '768'], ['fein', '1024']];
+  let letzter;
+  for (const [q, gross] of plan) {
+    const modell = FLUX_MODELLE[q];
+    try {
+      const r = formular(gross);
+      const aus = await Promise.race([
+        env.AI.run(modell, { multipart: { body: r.body, contentType: r.headers.get('content-type') } }),
+        new Promise((_, nein) => setTimeout(() => nein(new Error('3046: Zeitüberschreitung')), 35000))
+      ]);
+      if (!aus || !aus.image) throw new Error('FLUX lieferte kein Bild');
+      const kopf = aus.image.slice(0, 8);
+      const mime = kopf.startsWith('iVBOR') ? 'image/png' : kopf.startsWith('UklG') ? 'image/webp' : 'image/jpeg';
+      return { bild: aus.image, mime, modell };
+    } catch (e) {
+      letzter = e;
+      if (/4006|neurons/.test(String(e.message))) break;   /* Kontingent leer: nicht weiter versuchen */
+    }
+  }
+  throw letzter;
 }
 
 async function produktfoto(env, body) {

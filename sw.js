@@ -1,4 +1,4 @@
-const CACHE = 'outfit-v43';
+const CACHE = 'outfit-v44';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './manifest.json',
   './icon-192.png', './icon-512.png', './apple-touch-icon.png',
   './fonts/instrument-serif.woff2', './fonts/instrument-serif-italic.woff2'];

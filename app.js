@@ -1592,13 +1592,19 @@ async function kiAnalyse(item) {
    (429) wird nicht wiederholt. */
 async function dienstAnfrage(pfad, daten, versuche = 3) {
   let letzter;
+  /* Nie endlos warten: nach spätestens 2,5 Minuten abbrechen und Bescheid sagen */
+  const grenze = pfad === '/produktfoto' ? 150000 : 90000;
   for (let i = 0; i < versuche; i++) {
     try {
-      const res = await fetch(dienstUrl() + pfad, { method: 'POST', headers: dienstKopf(), body: JSON.stringify(daten) });
+      const ab = new AbortController();
+      const uhr = setTimeout(() => ab.abort(), grenze);
+      const res = await fetch(dienstUrl() + pfad, { method: 'POST', headers: dienstKopf(), body: JSON.stringify(daten), signal: ab.signal })
+        .finally(() => clearTimeout(uhr));
       return await antwortLesen(res);
     } catch (e) {
       letzter = e;
       if (/429|aufgebraucht|Kontingent|nicht freigegeben/i.test(String(e.message))) break;
+      if (e.name === 'AbortError') { letzter = new Error('Zeitüberschreitung'); break; }
       if (i < versuche - 1) await new Promise(r => setTimeout(r, 1500 * (i + 1)));
     }
   }
@@ -2820,6 +2826,7 @@ async function vomWeissLoesen(cv) {
 const bildFehler = e => {
   const m = String((e && e.message) || e || '');
   if (/Workers AI|neuron|daily|4006|capacity|Produktfotos aufgebraucht/i.test(m)) return 'Für heute sind die kostenlosen Produktfotos aufgebraucht. Morgen geht es weiter.';
+  if (/3046|Zeitüberschreitung|timeout|524/i.test(m)) return 'Der Bilddienst antwortet gerade nicht. Nimm vorerst dein Foto – über „Produktfoto neu erzeugen" im Teil geht es später.';
   const t = fehlerText(e);
   return /Stilanalyse/.test(t) ? 'Das Produktfoto ließ sich gerade nicht erzeugen. Versuch es gleich noch einmal.' : t;
 };
