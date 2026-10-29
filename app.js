@@ -1435,7 +1435,11 @@ function fehlerText(e) {
   console.warn('KI-Dienst:', m);
 
   /* Fälle, in denen der Nutzer selbst etwas tun kann */
-  if (/erreichbar|Failed to fetch|NetworkError|Load failed/i.test(m)) {
+  /* „Load failed" meldet iOS bei jedem abgebrochenen Abruf – auch wenn der Dienst
+     abbricht oder die App kurz im Hintergrund war. Nur bei echter Offline-Lage
+     von der Verbindung sprechen. */
+  if (/Dienstabbruch/.test(m)) return 'Der KI-Dienst hat nicht geantwortet. Bleib in der App, während er arbeitet, und versuch es gleich noch einmal.';
+  if (/offline/i.test(m) || (/erreichbar|Failed to fetch|NetworkError|Load failed/i.test(m) && navigator.onLine === false)) {
     return 'Keine Verbindung. Prüf dein Netz und versuch es gleich noch einmal.';
   }
   const warte = /retry in ([0-9]+)m/i.exec(m);
@@ -1605,9 +1609,15 @@ async function dienstAnfrage(pfad, daten, versuche = 3) {
       letzter = e;
       if (/429|aufgebraucht|Kontingent|nicht freigegeben/i.test(String(e.message))) break;
       if (e.name === 'AbortError') { letzter = new Error('Zeitüberschreitung'); break; }
+      if (e instanceof TypeError) letzter = new Error(navigator.onLine === false ? 'offline' : 'Dienstabbruch: ' + e.message);
       if (i < versuche - 1) await new Promise(r => setTimeout(r, 1500 * (i + 1)));
     }
   }
+  /* Für die Fehlersuche: was auf dem Gerät schiefging, im Protokoll des Dienstes ablegen */
+  try {
+    fetch(dienstUrl() + '/clientfehler', { method: 'POST', headers: dienstKopf(),
+      body: JSON.stringify({ pfad, fehler: String(letzter && letzter.message || letzter).slice(0, 200), sichtbar: document.visibilityState }) });
+  } catch (e) {}
   throw letzter;
 }
 

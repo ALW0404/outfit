@@ -774,6 +774,17 @@ export default {
       }
     }
 
+    if (url.pathname === '/clientfehler' && env.ZAEHLER) {
+      try {
+        const b = await request.json();
+        const log = (await env.ZAEHLER.get('fehlerlog', 'json')) || [];
+        log.unshift({ zeit: new Date().toISOString(), pfad: 'app:' + String(b.pfad || '').slice(0, 30), geraet: geraet.slice(0, 6),
+          fehler: String(b.fehler || '').slice(0, 200) + (b.sichtbar === 'hidden' ? ' (App im Hintergrund)' : '') });
+        await env.ZAEHLER.put('fehlerlog', JSON.stringify(log.slice(0, 30)));
+      } catch {}
+      return json({ ok: true }, env);
+    }
+
     if (url.pathname === '/schrank' || url.pathname === '/nacht') {
       if (!env.ZAEHLER) return json({ fehler: 'KV-Bindung ZAEHLER fehlt' }, env, 500);
       if (!geraet) return json({ fehler: 'Gerätekennung fehlt' }, env, 400);
