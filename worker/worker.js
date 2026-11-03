@@ -615,7 +615,10 @@ async function produktfotoFlux(env, body) {
       return { bild: aus.image, mime, modell };
     } catch (e) {
       letzter = e;
-      if (/4006|neurons/.test(String(e.message))) break;   /* Kontingent leer: nicht weiter versuchen */
+      if (/4006|neurons/.test(String(e.message))) {   /* Kontingent leer: merken, nicht weiter versuchen */
+        await plus(env, 'bildleer:' + heute(), 1);
+        throw new Error('Für heute sind die kostenlosen Produktfotos aufgebraucht. Morgen geht es weiter.');
+      }
     }
   }
   throw letzter;
@@ -709,7 +712,8 @@ export default {
         bereit: !!env.GEMINI_KEY,
         heute: await verbrauch(env),
         limit,
-        bilder: { heute: await zahl(env, bildKey()), limit: l.bilder },
+        bilder: await (async () => { const n = await zahl(env, bildKey());
+          return { heute: await zahl(env, 'bildn:' + heute()), neurons: n, frei: Math.max(0, 10000 - n), erschoepft: (await zahl(env, 'bildleer:' + heute())) > 0 }; })(),
         geraet: geraet ? { heute: await verbrauch(env, geraet), limit: l.geraet,
           bilder: await zahl(env, bildKey(geraet)), bilderLimit: l.bilderGeraet } : null,
         modell: env.GEMINI_MODEL || STANDARD_MODELL,
@@ -808,7 +812,7 @@ export default {
     }
 
     if (url.pathname === '/produktfoto') {
-      if (await zahl(env, bildKey()) >= l.bilder || (geraet && await zahl(env, bildKey(geraet)) >= l.bilderGeraet)) {
+      if ((env.BILD_LIMIT && await zahl(env, bildKey()) >= l.bilder) || (env.BILD_LIMIT_GERAET && geraet && await zahl(env, bildKey(geraet)) >= l.bilderGeraet)) {
         return json({ fehler: 'Für heute sind die kostenlosen Produktfotos aufgebraucht. Morgen geht es weiter.' }, env, 429);
       }
     } else {
@@ -881,7 +885,11 @@ export default {
         const ergebnis = await produktfoto(env, body);
         if (ergebnis.fehler) return json(ergebnis, env, 400);
         /* FLUX läuft im eigenen Cloudflare-Kontingent, nicht in Googles Tagesgrenze */
-        if (String(ergebnis.modell || '').startsWith('@cf/')) await zaehleBild(env, /9b/.test(ergebnis.modell) ? 14 : 1, geraet);
+        if (String(ergebnis.modell || '').startsWith('@cf/')) {
+          /* Geschätzte Neurons: klein 4B bei 768 px ≈ 75, klein 9B ≈ 1.550 */
+          await zaehleBild(env, /9b/.test(ergebnis.modell) ? 1550 : 75, geraet);
+          await plus(env, 'bildn:' + heute(), 1);
+        }
         else await zaehleHoch(env, 1, geraet);
         return json(ergebnis, env);
       }

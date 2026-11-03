@@ -1477,6 +1477,25 @@ function geraetId() {
 }
 const dienstKopf = () => ({ 'Content-Type': 'application/json', 'X-Geraet': geraetId() });
 
+/* ---- Produktfotos heute ----
+   Gemeinsames Gratis-Kontingent bei Cloudflare (~10.000 Neurons/Tag, Rücksetzung
+   0 Uhr UTC). Angezeigt werden erzeugte Bilder und eine Schätzung, wie viele frei sind. */
+let _bildZaehler = null;
+async function bildZaehlerLaden() {
+  if (!dienstUrl()) return;
+  try {
+    const d = await (await fetch(dienstUrl() + '/status', { headers: { 'X-Geraet': geraetId() } })).json();
+    _bildZaehler = d.bilder || null;
+    document.querySelectorAll('[data-bildzaehler]').forEach(el => { el.innerHTML = bildZaehlerText(); });
+  } catch (e) {}
+}
+function bildZaehlerText() {
+  const b = _bildZaehler;
+  if (!b) return '';
+  if (b.erschoepft) return `${b.heute} heute · aufgebraucht`;
+  return `${b.heute} heute · ca. ${Math.floor(b.frei / 75)} frei`;
+}
+
 /* ---- Wetter ----
    Open-Meteo: frei, ohne Schlüssel. Ort aus der Einstellung, sonst der aktuelle
    Standort. 30 Minuten zwischengespeichert, damit nicht jedes Neuzeichnen fragt. */
@@ -2081,7 +2100,7 @@ function render() {
   renderOverlay();
   attachSwipe();
   UI._neueKarte = false;
-  if (UI.tab === 'data' && !UI.sorting && !UI.builder) { showUsage(); if (entwicklermodus()) zeigeVerbrauch(); }
+  if (UI.tab === 'data' && !UI.sorting && !UI.builder) { showUsage(); bildZaehlerLaden(); if (entwicklermodus()) zeigeVerbrauch(); }
   saveUI();
 }
 
@@ -2546,6 +2565,10 @@ function renderData() {
   ${segHTML('abteilung', [['damen', 'Damenmode'], ['herren', 'Herrenmode']], abteilung(), 'App.setAbteilung')}
   <p class="small" style="margin:-4px 4px 0">Steuert Kategorien, Shop-Links und die Vorschläge der Stylistin.</p>
 
+  <h3 class="abschnitt">Produktfotos</h3>
+  <div class="liste"><div class="zeile-l ohne-ico"><span class="ltext">Heute erzeugt<small>Gemeinsames Gratis-Kontingent aller Geräte, wird um ${new Date(Date.UTC(2000,0,1)).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr zurückgesetzt. „Genauer" zählt etwa wie 20 Bilder.</small></span>
+    <span class="lwert" data-bildzaehler>${bildZaehlerText() || '…'}</span></div></div>
+
   <h3 class="abschnitt">Sichern</h3>
   <div class="liste">
     ${zeile('App.exportData(true)', 'download', '', 'Backup mit Bildern', 'Vollständig – zum Umziehen oder Aufbewahren')}
@@ -2605,6 +2628,7 @@ function renderStudio() {
   return `<div class="overlay"><div class="sheet" onclick="event.stopPropagation()">
     <div class="sheet-head">
       <h2>Studio</h2>
+      <span class="bildzaehler" data-bildzaehler>${bildZaehlerText()}</span>
       <button class="zu" onclick="App.studioCancel()" aria-label="Abbrechen">${ico('x')}</button>
     </div>
     <div class="studio-stage">
@@ -2825,6 +2849,7 @@ async function nachbilden(cv, box, kat, beschreibung, qualitaet, extra = {}) {
   const j = await dienstAnfrage('/produktfoto', { bild, detail, kategorie: TEIL_NAME[kat], kategorieEn: KAT_EN[kat],
     beschreibung: beschreibung || '', farbe: extra.farbe || '', muster: extra.muster || '',
     qualitaet: qualitaet || 'schnell' }, 2);
+  bildZaehlerLaden();
   const img = await loadImg(`data:${j.mime || 'image/jpeg'};base64,${j.bild}`);
   return canvasFrom(img, STUDIO_WORK);
 }
@@ -2960,7 +2985,7 @@ function renderModal() {
     <div class="checker"><img data-pic="${d.picId}" alt="" id="teilbild" style="${farbFilterCss(d.anpassung)}"></div>
     <div class="nacharbeit">
       <button class="chip mini ${UI.anpassen ? 'active' : ''}" onclick="App.anpassenAuf()">${ico('palette')} Farbe anpassen</button>
-      ${d.vorlagePicId && dienstUrl() ? `<button class="chip mini" onclick="App.teilNeuErzeugen()" ${UI.teilErzeugt ? 'disabled' : ''}>${UI.teilErzeugt ? '<span class="spin mini"></span> Wird erzeugt …' : `${ico('dice')} Produktfoto neu erzeugen`}</button>
+      ${dienstUrl() ? `<button class="chip mini" onclick="App.teilNeuErzeugen()" ${UI.teilErzeugt ? 'disabled' : ''}>${UI.teilErzeugt ? '<span class="spin mini"></span> Wird erzeugt …' : `${ico('dice')} Produktfoto neu erzeugen`}</button>
       <button class="chip mini" onclick="App.teilNeuErzeugen(true)" ${UI.teilErzeugt ? 'disabled' : ''}>${ico('sparkle')} Genauer</button>` : ''}
     </div>
     ${UI.anpassen ? `<div class="card kompakt" style="margin:8px 0 0">
@@ -3405,18 +3430,23 @@ async function anpassungAnwenden(d) {
 /* Produktfoto aus der gespeicherten Vorlage neu erzeugen */
 App.teilNeuErzeugen = async fein => {
   const d = UI.draft;
-  if (!d || !d.vorlagePicId) return;
+  if (!d) return;
   UI.teilErzeugt = true; render();
   try {
-    const img = await loadImg(URL.createObjectURL(await picGet(d.vorlagePicId)));
+    /* Ohne gespeicherte Vorlage (ältere Teile) dient das aktuelle Bild als Vorlage */
+    const img = await loadImg(URL.createObjectURL(await picGet(d.vorlagePicId || d.picId)));
     const vorlage = canvasFrom(img, 1024);
     const neu = await nachbilden(vorlage, null, d.cat, d.beschreibung || d.name || '', fein ? 'fein' : 'schnell',
       { farbe: d.farbe, muster: d.muster });
     const frei = farbAngleich(await vomWeissLoesen(neu), hexLab(d.farbe));
     const { blob, colors, ar } = await prepItemImage(await encode(frei, true), 900, true);
-    d.picId = uid(); d.colors = colors; d.ar = ar; d.cut = true; delete d.anpassung;
+    d.picId = uid(); d.colors = colors; d.ar = ar; d.cut = true; d.nachgebildet = true; delete d.anpassung;
     await picPut(d.picId, blob);
-    toast('Neues Produktfoto – Speichern übernimmt es');
+    /* Gleich übernehmen – sonst ging das neue Bild verloren, wenn man nicht auf Speichern tippte */
+    const ex = DB.items.findIndex(i => i.id === d.id);
+    if (ex >= 0) { DB.items[ex] = { ...DB.items[ex], picId: d.picId, colors, ar, cut: true, nachgebildet: true }; save(); }
+    toast('Neues Produktfoto übernommen');
+    bildZaehlerLaden();
   } catch (e) { toast(bildFehler(e)); }
   UI.teilErzeugt = false;
   if (UI.draft === d) render();
@@ -3631,6 +3661,7 @@ async function openStudio(blob) {
     const hatAlpha = durchsichtig / (klein.width * klein.height) > 0.02;
 
     dienstFaehigkeiten().then(() => { if (UI.studio) render(); });
+    bildZaehlerLaden();
     UI.studio = { gross, klein, vorher: klein, hatAlpha, maskCv: null,
       tol: 0.45, belichtung: 0, licht: true, schatten: false, zeigeVorher: false,
       status: hatAlpha ? 'alpha' : (kiVerfuegbar() ? 'laden' : 'einfach') };
@@ -3970,8 +4001,8 @@ App.studioCommit = async () => {
     if (UI.draft && s.teilKat) App.draftSet('cat', s.teilKat, true);
     if (UI.draft && s.teilName && !UI.draft.name) UI.draft.name = s.teilName;
     if (UI.draft && s.suchbegriff) UI.draft.suchbegriff = s.suchbegriff;
-    if (UI.draft && s.nachgebildet) {
-      UI.draft.nachgebildet = true;
+    if (UI.draft && (s.nachgebildet || s.box || s.umriss)) {
+      if (s.nachgebildet) UI.draft.nachgebildet = true;
       const vorlagePicId = uid();
       await picPut(vorlagePicId, await canvasToBlob(aufMass(ausschnittCanvas(s.original || s.gross, s.box, 0.05), 320, 640), 'image/jpeg', 0.85));
       Object.assign(UI.draft, { vorlagePicId, farbe: s.farbe || '', muster: s.muster || '', beschreibung: s.beschreibung || '' });

@@ -10,8 +10,6 @@ print(json.dumps({'main_module':'worker.js','compatibility_date':'2026-10-18',
  'placement':{'region':'gcp:europe-west3'},   # immer nahe Frankfurt ausführen – Google sperrt manche Regionen
  'bindings':[{'type':'plain_text','name':'ALLOW_ORIGIN','text':'https://alw0404.github.io'},
              {'type':'plain_text','name':'TAGESLIMIT','text':'150'},
-             {'type':'plain_text','name':'BILD_LIMIT','text':'40'},
-             {'type':'plain_text','name':'BILD_LIMIT_GERAET','text':'25'},
              {'type':'kv_namespace','name':'ZAEHLER','namespace_id':sys.argv[1]},
              {'type':'ai','name':'AI'}],
  'keep_bindings':['secret_text']}))" "$NS")

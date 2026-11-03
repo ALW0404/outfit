@@ -711,6 +711,7 @@ img[data-pic].laedt{opacity:0;}
 .auswahlleiste .btn{min-height:44px; padding:8px 10px; font-size:14px; background:var(--surface);}
 .auswahlleiste .btn.loeschen{color:var(--red);}
 
+.bildzaehler{font-size:12px; color:var(--ink-3); margin-left:auto; margin-right:10px; white-space:nowrap;}
 .nacharbeit{display:flex; gap:6px; flex-wrap:wrap; margin:10px 0 0;}
 
 /* Gelöschte Teile in Outfits */
