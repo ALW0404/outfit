@@ -886,8 +886,8 @@ export default {
         if (ergebnis.fehler) return json(ergebnis, env, 400);
         /* FLUX läuft im eigenen Cloudflare-Kontingent, nicht in Googles Tagesgrenze */
         if (String(ergebnis.modell || '').startsWith('@cf/')) {
-          /* Geschätzte Neurons: klein 4B bei 768 px ≈ 75, klein 9B ≈ 1.550 */
-          await zaehleBild(env, /9b/.test(ergebnis.modell) ? 1550 : 75, geraet);
+          /* Neurons je Bild, aus der Cloudflare-Abrechnung gemessen: klein 4B bei 768 px ≈ 61, klein 9B ≈ 565 */
+          await zaehleBild(env, /9b/.test(ergebnis.modell) ? 565 : 61, geraet);   /* gemessen am Cloudflare-Verbrauch: 15 Bilder = 8.467, 18 Bilder = 1.105 Neurons */
           await plus(env, 'bildn:' + heute(), 1);
         }
         else await zaehleHoch(env, 1, geraet);

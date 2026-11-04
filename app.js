@@ -1493,7 +1493,7 @@ function bildZaehlerText() {
   const b = _bildZaehler;
   if (!b) return '';
   if (b.erschoepft) return `${b.heute} heute · aufgebraucht`;
-  return `${b.heute} heute · ca. ${Math.floor(b.frei / 75)} frei`;
+  return `${b.heute} heute · ca. ${Math.floor(b.frei / 61)} frei`;
 }
 
 /* ---- Wetter ----
@@ -2567,7 +2567,7 @@ function renderData() {
   <p class="small" style="margin:-4px 4px 0">Steuert Kategorien, Shop-Links und die Vorschläge der Stylistin.</p>
 
   <h3 class="abschnitt">Produktfotos</h3>
-  <div class="liste"><div class="zeile-l ohne-ico"><span class="ltext">Heute erzeugt<small>Gemeinsames Gratis-Kontingent aller Geräte, wird um ${new Date(Date.UTC(2000,0,1)).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr zurückgesetzt. „Genauer" zählt etwa wie 20 Bilder.</small></span>
+  <div class="liste"><div class="zeile-l ohne-ico"><span class="ltext">Heute erzeugt<small>Gemeinsames Gratis-Kontingent aller Geräte, wird um ${new Date(Date.UTC(2000,0,1)).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr zurückgesetzt. „Genauer" zählt etwa wie 9 Bilder.</small></span>
     <span class="lwert" data-bildzaehler>${bildZaehlerText() || '…'}</span></div></div>
 
   <h3 class="abschnitt">Sichern</h3>
