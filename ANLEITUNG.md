@@ -225,6 +225,12 @@ Foto – im Teil steht deshalb „Von der KI als Produktfoto nachgebildet". *Neu
 noch einmal, *Mein Foto verwenden* nimmt stattdessen den Ausschnitt aus deinem Foto. Kostenlos,
 etwa 90 Bilder pro Tag.
 
+**Mehrere Fotos auf einmal hochladen.** Schrank → „+“ → *Aus Fotos wählen*: mehrere Fotos markieren.
+Das Studio zeigt sie nacheinander („Foto 2 von 5“). Mit **Wischen links/rechts** oder den Pfeilen
+wechselst du zwischen den Fotos, tippst an, was es ist, und übernimmst es. Nach dem Speichern springt
+die App zum nächsten Foto, das noch offen ist; grüne Punkte zeigen, was schon im Schrank liegt. Die
+Kamera macht weiterhin ein Foto nach dem anderen. *X* beendet den ganzen Stapel.
+
 **Mehrere Teile auf einem Foto.** Im Schrank über „+" → *Mehrere Teile auf einem Foto*: Leg Teile
 nebeneinander aufs Bett und fotografiere sie zusammen. Die App findet jedes Teil (Kategorie und
 Name), du hakst ab, welche in den Schrank sollen, und jedes wird zum Produktfoto. Danach prüfst du

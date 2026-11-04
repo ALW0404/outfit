@@ -2099,6 +2099,7 @@ function render() {
     el.style.setProperty('--i', el.dataset.ziel)));
   renderOverlay();
   attachSwipe();
+  attachStudioSwipe();
   UI._neueKarte = false;
   if (UI.tab === 'data' && !UI.sorting && !UI.builder) { showUsage(); bildZaehlerLaden(); if (entwicklermodus()) zeigeVerbrauch(); }
   saveUI();
@@ -2635,6 +2636,13 @@ function renderStudio() {
       ${laedt ? '<div class="studio-laden"><span class="spin"></span><span>Modell wird geladen …</span></div>'
               : '<canvas id="studio-cv"></canvas>'}
     </div>
+    ${UI.stapel && UI.stapel.dateien.length > 1 ? `<div class="stapelleiste">
+      <button onclick="App.stapelGehe(-1)" aria-label="Voriges Foto">${ico('chev', 'links')}</button>
+      <span><b>Foto ${UI.stapel.index + 1} von ${UI.stapel.dateien.length}</b>
+        <span class="punkte">${UI.stapel.dateien.map((_, i) => `<i class="${UI.stapel.erledigt.has(i) ? 'fertig' : i === UI.stapel.index ? 'jetzt' : ''}"></i>`).join('')}</span></span>
+      <button onclick="App.stapelGehe(1)" aria-label="Nächstes Foto">${ico('chev')}</button>
+    </div>
+    <p class="small center" style="margin:0 0 4px">Zum Wechseln wischen. ${UI.stapel.erledigt.size ? `${UI.stapel.erledigt.size} schon im Schrank.` : ''}</p>` : ''}
     ${studioTeilHTML(s, laedt)}
     <p class="small center" style="margin:10px 0 4px">${
       s.nachgebildet ? 'Von der KI als Produktfoto nachgebildet – „Original ansehen" zeigt dein Foto.'
@@ -2946,7 +2954,7 @@ function renderModal() {
         ${pin ? '' : `<button class="zeile-l" onclick="App.neuAus('camera')"><span class="lico">${ico('camera')}</span>
           <span class="ltext">Foto machen</span>${ico('chev', 'chev')}</button>`}
         <button class="zeile-l" onclick="App.neuAus('library')"><span class="lico hell">${ico('image')}</span>
-          <span class="ltext">Aus Fotos wählen</span>${ico('chev', 'chev')}</button>
+          <span class="ltext">Aus Fotos wählen<small>${pin ? '' : 'Mehrere auf einmal möglich'}</small></span>${ico('chev', 'chev')}</button>
         <button class="zeile-l" onclick="App.neuAus('paste')"><span class="lico hell">${ico('paste')}</span>
           <span class="ltext">Einfügen<small>${pin ? 'Bild aus der Zwischenablage' : 'Freigestelltes Motiv aus der Zwischenablage'}</small></span>${ico('chev', 'chev')}</button>
       </div>
@@ -3147,7 +3155,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.remove(), 2600);
 }
 
-App.setTab = tab => { UI.auswahl = null; UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; UI.queue = null; UI.detail = null;
+App.setTab = tab => { UI.auswahl = null; UI.stapel = null; UI.tab = tab; UI.modal = null; UI.sorting = false; UI.builder = null; UI.picker = null; UI.queue = null; UI.detail = null;
 UI.studio = null;
 UI.seasonDraft = null; UI.seasonDraftId = null; render(); };
 App.filterCloset = c => { UI.closetFilter = c; render(); };
@@ -3816,7 +3824,7 @@ async function openHaufen(file, wunsch, getragen) {
 
 App.haufenFoto = quelle => {
   UI.dateiZiel = 'haufen';
-  App.addItem(quelle);
+  App.addItem(quelle, true);
 };
 App.haufenTeil = i => { const t = UI.haufen && UI.haufen.teile[i]; if (t) { t.an = !t.an; render(); } };
 App.haufenZu = () => {
@@ -3985,7 +3993,7 @@ App.studioSlide = (key, val) => {
 };
 App.studioToggleVorher = () => { UI.studio.zeigeVorher = !UI.studio.zeigeVorher; render(); };
 
-App.studioCancel = () => { UI.studio = null; render(); };
+App.studioCancel = () => { UI.studio = null; UI.stapel = null; render(); };
 App.studioCommit = async () => {
   const s = UI.studio;
   if (!s) return;
@@ -4015,21 +4023,66 @@ App.studioCommit = async () => {
 };
 
 /* --- Teil hinzufügen --- */
-App.addItem = source => {
+App.addItem = (source, einzeln) => {
   const input = $('#pick-item');
   if (source === 'camera') input.setAttribute('capture', 'environment');
   else input.removeAttribute('capture');
+  /* Aus der Mediathek lassen sich mehrere Fotos wählen; die Kamera liefert eines */
+  input.multiple = source !== 'camera' && !einzeln;
   input.value = '';
   input.click();
 };
 App.itemFileChosen = async input => {
-  const file = input.files && input.files[0];
+  const dateien = [...(input.files || [])];
   const ziel = UI.dateiZiel; UI.dateiZiel = null;
-  if (!file) return;
+  if (!dateien.length) return;
   input.value = '';
-  if (ziel === 'haufen') await openHaufen(file);
-  else await openStudio(file);
+  if (ziel === 'haufen') { UI.stapel = null; await openHaufen(dateien[0]); return; }
+  UI.stapel = dateien.length > 1 ? { dateien, index: 0, erledigt: new Set() } : null;
+  await openStudio(dateien[0]);
 };
+
+/* ---- Mehrere Fotos nacheinander ----
+   Die gewählten Fotos liegen in einer Reihe. Im Studio wechselt Wischen oder ein
+   Tipp auf die Pfeile zwischen ihnen; nach dem Speichern eines Teils springt die
+   App zum nächsten Foto, das noch nicht übernommen wurde. */
+function stapelNaechster(von, richtung = 1) {
+  const st = UI.stapel; if (!st) return -1;
+  const n = st.dateien.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (von + richtung * k + n * k) % n;
+    if (!st.erledigt.has(i) && i !== von) return i;
+  }
+  return -1;
+}
+App.stapelGehe = async richtung => {
+  const st = UI.stapel; if (!st || !UI.studio) return;
+  const i = stapelNaechster(st.index, richtung);
+  if (i < 0) return;
+  st.index = i;
+  await openStudio(st.dateien[i]);
+};
+async function stapelWeiter(erledigt) {
+  const st = UI.stapel; if (!st) return;
+  if (erledigt) st.erledigt.add(st.index);
+  const i = stapelNaechster(st.index, 1);
+  if (i < 0) { UI.stapel = null; toast(`Alle ${st.dateien.length} Fotos bearbeitet`); render(); return; }
+  st.index = i;
+  await openStudio(st.dateien[i]);
+}
+/* Wischen links/rechts auf dem Studio-Bild */
+function attachStudioSwipe() {
+  const st = UI.stapel, el = document.querySelector('.studio-stage');
+  if (!el || !st || st.dateien.length < 2) return;
+  let x0 = null, y0 = 0;
+  el.addEventListener('pointerdown', e => { x0 = e.clientX; y0 = e.clientY; });
+  el.addEventListener('pointerup', e => {
+    if (x0 === null) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0; x0 = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) App.stapelGehe(dx < 0 ? 1 : -1);
+  });
+  el.addEventListener('pointercancel', () => { x0 = null; });
+}
 App.pasteItem = () => pasteImage(openStudio);
 async function pasteImage(handler) {
   try {
@@ -4121,12 +4174,14 @@ App.saveItem = async () => {
   UI.modal = null; UI.draft = null; UI.queue = null;
   toast('Gespeichert');
   render();
+  stapelWeiter(true);
 };
 App.cancelItem = async () => {
   const d = UI.draft;
   UI.modal = null; UI.draft = null; UI.anpassen = false;
   if (d && d._newPic) { dropPicURL(d.picId); await picDel(d.picId); }
   render();
+  stapelWeiter(false);
 };
 App.deleteItem = async () => {
   const d = UI.draft;
